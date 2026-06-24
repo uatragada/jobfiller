@@ -31,7 +31,7 @@ jobs:
         run: python -m pytest -q
 
       - name: Check cross-platform startup script syntax
-        run: python -m py_compile start_jobfiller.py
+        run: python -m py_compile start_jobfiller.py scripts/doctor.py scripts/verify_release.py
 
       - name: Run clone-readiness doctor
         run: python scripts/doctor.py
@@ -54,3 +54,6 @@ jobs:
       - name: Build frontend
         working-directory: app/frontend
         run: npm run build
+
+      - name: Run startup smoke
+        run: python start_jobfiller.py --smoke --startup-budget 30

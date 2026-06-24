@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -174,6 +176,29 @@ def start_process(command: list[str], *, cwd: Path, stdout_path: Path, stderr_pa
     )
 
 
+def stop_process_tree(process: subprocess.Popen[bytes] | None, label: str) -> None:
+    if process is None or process.poll() is not None:
+        return
+    print(f"Stopping {label} PID {process.pid}...")
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        else:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        process.wait(timeout=5)
+    except Exception:
+        try:
+            process.kill()
+            process.wait(timeout=5)
+        except Exception:
+            pass
+
+
 def write_runtime_config(backend_port: int, frontend_port: int, token: str) -> None:
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -186,61 +211,120 @@ def write_runtime_config(backend_port: int, frontend_port: int, token: str) -> N
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Start the local JobFiller backend, dashboard, and MCP runtime config.")
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Start backend/frontend, verify readiness, then stop the child processes before exiting.",
+    )
+    parser.add_argument(
+        "--startup-budget",
+        type=float,
+        default=30.0,
+        help="Maximum allowed warm-start time in seconds for --smoke mode.",
+    )
+    args = parser.parse_args()
+
     started = time.monotonic()
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    backend: subprocess.Popen[bytes] | None = None
+    frontend: subprocess.Popen[bytes] | None = None
 
-    python = ensure_python_environment()
-    pm = package_manager()
-    ensure_frontend_dependencies(pm)
+    try:
+        python = ensure_python_environment()
+        pm = package_manager()
+        ensure_frontend_dependencies(pm)
 
-    backend_start = env_int("JOBFILLER_BACKEND_PORT", 8001)
-    backend_max = env_int("JOBFILLER_BACKEND_PORT_MAX", backend_start + 4)
-    frontend_start = env_int("JOBFILLER_FRONTEND_PORT", 5173)
-    frontend_max = env_int("JOBFILLER_FRONTEND_PORT_MAX", frontend_start + 4)
+        backend_start = env_int("JOBFILLER_BACKEND_PORT", 8001)
+        backend_max = env_int("JOBFILLER_BACKEND_PORT_MAX", backend_start + 4)
+        frontend_start = env_int("JOBFILLER_FRONTEND_PORT", 5173)
+        frontend_max = env_int("JOBFILLER_FRONTEND_PORT_MAX", frontend_start + 20)
 
-    backend_port = find_free_port(backend_start, max(backend_start, backend_max))
-    frontend_port = find_free_port(frontend_start, max(frontend_start, frontend_max))
-    backend_base = f"http://127.0.0.1:{backend_port}/api"
+        backend_port = find_free_port(backend_start, max(backend_start, backend_max))
+        backend_base = f"http://127.0.0.1:{backend_port}/api"
 
-    print(f"Starting JobFiller backend on {backend_base}")
-    backend = start_process(
-        [python, "-m", "uvicorn", "app.backend.main:app", "--host", "127.0.0.1", "--port", str(backend_port)],
-        cwd=ROOT,
-        stdout_path=BACKEND_LOG,
-        stderr_path=BACKEND_ERR_LOG,
-    )
-    token = wait_for_backend(backend_port)
-    if backend.poll() is not None:
-        raise SystemExit(f"Backend exited early. Check {BACKEND_ERR_LOG}")
+        print(f"Starting JobFiller backend on {backend_base}")
+        backend = start_process(
+            [python, "-m", "uvicorn", "app.backend.main:app", "--host", "127.0.0.1", "--port", str(backend_port)],
+            cwd=ROOT,
+            stdout_path=BACKEND_LOG,
+            stderr_path=BACKEND_ERR_LOG,
+        )
+        token = wait_for_backend(backend_port)
+        if backend.poll() is not None:
+            raise SystemExit(f"Backend exited early. Check {BACKEND_ERR_LOG}")
 
-    frontend_env = os.environ.copy()
-    frontend_env["VITE_API_BASE"] = backend_base
-    pm_name = package_manager_name(pm)
-    frontend_args = ["dev", "--host", "127.0.0.1", "--port", str(frontend_port)]
-    if pm_name == "npm":
-        frontend_args = ["run", "dev", "--", "--host", "127.0.0.1", "--port", str(frontend_port)]
-    print(f"Starting JobFiller dashboard on http://127.0.0.1:{frontend_port}")
-    frontend = start_process(
-        [pm, *frontend_args],
-        cwd=FRONTEND_DIR,
-        stdout_path=FRONTEND_LOG,
-        stderr_path=FRONTEND_ERR_LOG,
-        env=frontend_env,
-    )
-    wait_for_frontend(frontend_port, backend_port, token)
-    if frontend.poll() is not None:
-        raise SystemExit(f"Frontend exited early. Check {FRONTEND_ERR_LOG}")
+        pm_name = package_manager_name(pm)
+        frontend_port = 0
+        frontend_error = ""
+        for candidate_port in range(frontend_start, max(frontend_start, frontend_max) + 1):
+            if not is_port_free(candidate_port):
+                continue
+            frontend_env = os.environ.copy()
+            frontend_env["VITE_API_BASE"] = backend_base
+            frontend_args = ["dev", "--host", "127.0.0.1", "--port", str(candidate_port), "--strictPort"]
+            if pm_name == "npm":
+                frontend_args = [
+                    "run",
+                    "dev",
+                    "--",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(candidate_port),
+                    "--strictPort",
+                ]
+            print(f"Starting JobFiller dashboard on http://127.0.0.1:{candidate_port}")
+            frontend = start_process(
+                [pm, *frontend_args],
+                cwd=FRONTEND_DIR,
+                stdout_path=FRONTEND_LOG,
+                stderr_path=FRONTEND_ERR_LOG,
+                env=frontend_env,
+            )
+            time.sleep(0.5)
+            if frontend.poll() is not None:
+                frontend_error = f"Frontend exited early on port {candidate_port}. Check {FRONTEND_ERR_LOG}"
+                frontend = None
+                continue
+            try:
+                wait_for_frontend(candidate_port, backend_port, token, timeout_seconds=10.0)
+            except SystemExit as exc:
+                frontend_error = str(exc)
+                stop_process_tree(frontend, "frontend")
+                frontend = None
+                continue
+            frontend_port = candidate_port
+            break
+        if frontend is None or not frontend_port:
+            raise SystemExit(
+                f"Frontend did not become ready on ports {frontend_start}-{max(frontend_start, frontend_max)}. "
+                f"Last error: {frontend_error}"
+            )
 
-    write_runtime_config(backend_port, frontend_port, token)
-    elapsed = round(time.monotonic() - started, 1)
-    print(f"Dashboard: http://127.0.0.1:{frontend_port}")
-    print(f"Backend API base: {backend_base}")
-    print(f"Runtime config for MCP clients: {RUNTIME_CONFIG}")
-    print(f"Backend logs: {BACKEND_LOG}")
-    print(f"Frontend logs: {FRONTEND_LOG}")
-    print(f"Startup completed in {elapsed}s.")
-    return 0
+        elapsed = round(time.monotonic() - started, 1)
+        print(f"Dashboard: http://127.0.0.1:{frontend_port}")
+        print(f"Backend API base: {backend_base}")
+        print(f"Backend logs: {BACKEND_LOG}")
+        print(f"Frontend logs: {FRONTEND_LOG}")
+        print(f"Startup completed in {elapsed}s.")
+        if args.smoke:
+            if elapsed > args.startup_budget:
+                raise SystemExit(
+                    f"Startup smoke exceeded {args.startup_budget:.1f}s budget: {elapsed}s. "
+                    "Warm starts should normally finish under 30 seconds."
+                )
+            print("Startup smoke passed. Runtime config was not updated in smoke mode.")
+            return 0
+
+        write_runtime_config(backend_port, frontend_port, token)
+        print(f"Runtime config for MCP clients: {RUNTIME_CONFIG}")
+        return 0
+    finally:
+        if args.smoke:
+            stop_process_tree(frontend, "frontend")
+            stop_process_tree(backend, "backend")
 
 
 if __name__ == "__main__":

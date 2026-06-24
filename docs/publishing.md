@@ -51,7 +51,7 @@ Or run the same checks manually:
 
 ```powershell
 python -m pytest -q
-python -m py_compile start_jobfiller.py
+python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py
 python scripts/doctor.py
 cd app\frontend
 npm ci
@@ -73,6 +73,8 @@ python start_jobfiller.py
 
 Warm startup should normally complete in under 30 seconds once dependencies
 are installed. Cold startup depends on Python and npm package download speed.
+The release verifier enforces this warm-start expectation with
+`python start_jobfiller.py --smoke --startup-budget 30`.
 
 ## Privacy Boundary
 

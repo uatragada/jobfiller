@@ -29,6 +29,7 @@ Both startup scripts create `.venv` when needed, install Python dependencies fro
 
 The first cold run may take longer while Python and Node packages install. After dependencies are installed, startup should normally be a single warm-start command.
 By default the PowerShell script restarts JobFiller's backend so code changes are picked up. Set `JOBFILLER_REUSE_BACKEND=true` before running the PowerShell script only when you intentionally want to reuse an already-running backend. The Python runner is non-destructive and chooses free ports when defaults are busy.
+For release checks or quick local confidence without leaving servers running, use `python start_jobfiller.py --smoke`.
 
 - Dashboard: `http://127.0.0.1:5173`
 - Backend API: printed by the startup script, usually `http://127.0.0.1:8001/api`
@@ -42,7 +43,7 @@ Useful startup overrides:
 $env:JOBFILLER_BACKEND_PORT = "8001"
 $env:JOBFILLER_BACKEND_PORT_MAX = "8005"
 $env:JOBFILLER_FRONTEND_PORT = "5173"
-$env:JOBFILLER_FRONTEND_PORT_MAX = "5177"
+$env:JOBFILLER_FRONTEND_PORT_MAX = "5193"
 $env:JOBFILLER_REUSE_BACKEND = "true"   # optional; reuse instead of restart
 ```
 
@@ -58,7 +59,7 @@ Or run the underlying checks individually:
 
 ```powershell
 python -m pytest -q
-python -m py_compile start_jobfiller.py
+python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py
 python scripts/doctor.py
 cd app\frontend
 npm ci
@@ -67,6 +68,7 @@ npm run build
 ```
 
 The expected result is a passing backend suite, passing frontend browser-flow tests, and a successful Vite production build.
+`python scripts/verify_release.py` also runs `python start_jobfiller.py --smoke` to prove the app reaches a usable dashboard/API state and cleans up its child processes.
 `python scripts/doctor.py` performs a fast clone-readiness check for Python, Node, package manager, config files, and privacy-sensitive ignore rules.
 
 ## Troubleshooting
@@ -76,7 +78,7 @@ The expected result is a passing backend suite, passing frontend browser-flow te
 - Frontend logs are written to `artifacts/jobfiller-frontend-current.log` and `artifacts/jobfiller-frontend-current.err.log`.
 - If port `5173` is busy, stop the existing Vite process and rerun the start script.
 - If backend ports `8001-8005` are busy, stop the conflicting local services or widen the scan with `JOBFILLER_BACKEND_PORT_MAX`.
-- If frontend ports `5173-5177` are busy when using the Python runner, widen the scan with `JOBFILLER_FRONTEND_PORT_MAX`.
+- If frontend ports `5173-5193` are busy when using the Python runner, widen the scan with `JOBFILLER_FRONTEND_PORT_MAX`.
 - Set `JOBFILLER_PYTHON`, `JOBFILLER_NPM`, or `JOBFILLER_PNPM` to known executable paths if auto-detection picks the wrong runtime.
 
 ## Settings And Profile

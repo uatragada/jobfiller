@@ -30,6 +30,12 @@ Before opening a pull request or publishing a branch, run:
 python scripts/verify_release.py
 ```
 
+To check startup without leaving background servers running:
+
+```powershell
+python start_jobfiller.py --smoke
+```
+
 For individual checks:
 
 ```powershell

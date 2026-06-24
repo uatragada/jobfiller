@@ -40,7 +40,11 @@ def main() -> int:
         return 1
 
     checks: list[tuple[str, list[str], Path]] = [
-        ("Python compile", [sys.executable, "-m", "py_compile", "start_jobfiller.py", "scripts/doctor.py"], ROOT),
+        (
+            "Python compile",
+            [sys.executable, "-m", "py_compile", "start_jobfiller.py", "scripts/doctor.py", "scripts/verify_release.py"],
+            ROOT,
+        ),
         ("Backend tests", [sys.executable, "-m", "pytest", "-q"], ROOT),
         ("Clone doctor", [sys.executable, "scripts/doctor.py"], ROOT),
     ]
@@ -52,6 +56,7 @@ def main() -> int:
         [
             ("Frontend tests", [npm, "test"], FRONTEND),
             ("Frontend production build", [npm, "run", "build"], FRONTEND),
+            ("Startup smoke", [sys.executable, "start_jobfiller.py", "--smoke", "--startup-budget", "30"], ROOT),
         ]
     )
 

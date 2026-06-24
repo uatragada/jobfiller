@@ -6,9 +6,10 @@ JobFiller from a fresh clone.
 - Git worktree is clean except ignored local runtime artifacts.
 - `python scripts/verify_release.py` passes.
 - `python -m pytest -q` passes.
-- `python -m py_compile start_jobfiller.py` passes.
+- `python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py` passes.
 - `python scripts/doctor.py` passes.
 - `npm ci`, `npm test`, and `npm run build` pass in `app/frontend`.
+- `python start_jobfiller.py --smoke` starts backend/frontend, verifies readiness, finishes within the warm-start budget, and cleans up child processes.
 - `.\Start-JobFiller.ps1` starts the backend and dashboard and logs elapsed startup time on Windows.
 - `python start_jobfiller.py` starts the backend and dashboard on a free local port.
 - Dashboard loads at `http://127.0.0.1:5173`.
