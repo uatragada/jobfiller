@@ -50,6 +50,10 @@ jobs:
         working-directory: app/frontend
         run: npm ci
 
+      - name: Install Playwright Chromium
+        working-directory: app/frontend
+        run: npx playwright install chromium
+
       - name: Run frontend flow tests
         working-directory: app/frontend
         run: npm test
