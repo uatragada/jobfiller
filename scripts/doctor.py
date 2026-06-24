@@ -87,6 +87,7 @@ def check_required_files() -> tuple[bool, str]:
         "app/frontend/package-lock.json",
         "start_jobfiller.py",
         "Start-JobFiller.ps1",
+        "scripts/smoke_mcp.py",
         ".codex/config.toml",
         ".mcp.json",
         "integrations/mcp/jobfiller_mcp_server.py",
@@ -99,7 +100,7 @@ def check_required_files() -> tuple[bool, str]:
 
 
 def check_json_files() -> tuple[bool, str]:
-    for path in [".mcp.json", "examples/jobs.sample.json"]:
+    for path in [".mcp.json", "examples/jobs.sample.json", "examples/mcp-export.sample.json"]:
         try:
             json.loads((ROOT / path).read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001 - doctor output should be direct.

@@ -42,6 +42,7 @@ For individual checks:
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
 python scripts/doctor.py
+python scripts/smoke_mcp.py
 cd app\frontend
 npm test
 npm run build

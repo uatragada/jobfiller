@@ -31,10 +31,13 @@ jobs:
         run: python -m pytest -q
 
       - name: Check cross-platform startup script syntax
-        run: python -m py_compile start_jobfiller.py scripts/doctor.py scripts/verify_release.py
+        run: python -m py_compile start_jobfiller.py scripts/doctor.py scripts/verify_release.py scripts/smoke_mcp.py
 
       - name: Run clone-readiness doctor
         run: python scripts/doctor.py
+
+      - name: Run MCP stdio smoke
+        run: python scripts/smoke_mcp.py
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -56,4 +59,4 @@ jobs:
         run: npm run build
 
       - name: Run startup smoke
-        run: python start_jobfiller.py --smoke --startup-budget 30
+        run: python start_jobfiller.py --smoke --mcp-export-smoke --startup-budget 30

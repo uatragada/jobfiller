@@ -15,6 +15,7 @@ def test_release_artifacts_exist_for_github_distribution() -> None:
         Path("start_jobfiller.py"),
         Path("scripts/doctor.py"),
         Path("scripts/verify_release.py"),
+        Path("scripts/smoke_mcp.py"),
         Path("scripts/Publish-JobFiller.ps1"),
         Path("docs/publishing.md"),
         Path("docs/release-checklist.md"),
@@ -41,9 +42,10 @@ def test_ci_runs_backend_and_frontend_validation() -> None:
     assert "uses: actions/setup-node@v4" in workflow
     assert "python -m pip install -r requirements-dev.txt" in workflow
     assert "python -m pytest -q" in workflow
-    assert "python -m py_compile start_jobfiller.py scripts/doctor.py scripts/verify_release.py" in workflow
+    assert "python -m py_compile start_jobfiller.py scripts/doctor.py scripts/verify_release.py scripts/smoke_mcp.py" in workflow
     assert "python scripts/doctor.py" in workflow
-    assert "python start_jobfiller.py --smoke --startup-budget 30" in workflow
+    assert "python scripts/smoke_mcp.py" in workflow
+    assert "python start_jobfiller.py --smoke --mcp-export-smoke --startup-budget 30" in workflow
     assert "npm ci" in workflow
     assert "npm test" in workflow
     assert "npm run build" in workflow
@@ -56,9 +58,11 @@ def test_release_verification_script_runs_core_checks() -> None:
     assert "requirements-dev.txt" in source
     assert '"scripts/verify_release.py"' in source
     assert '"scripts/doctor.py"' in source
+    assert '"scripts/smoke_mcp.py"' in source
+    assert "MCP stdio smoke" in source
     assert '"npm", "test"' in source or 'npm, "test"' in source
     assert '"npm", "run", "build"' in source or 'npm, "run", "build"' in source
-    assert '"start_jobfiller.py", "--smoke", "--startup-budget", "30"' in source
+    assert '"start_jobfiller.py", "--smoke", "--mcp-export-smoke", "--startup-budget", "30"' in source
     assert "node_modules" in source
 
 
@@ -90,6 +94,9 @@ def test_cross_platform_start_script_writes_mcp_runtime_config() -> None:
     assert "RUNTIME_CONFIG = OUTPUTS_DIR / \"jobfiller-runtime.json\"" in source
     assert "\"mutation_token\": token" in source
     assert '"--smoke"' in source
+    assert '"--mcp-export-smoke"' in source
+    assert "JOBFILLER_OUTPUT_DIR" in source
+    assert "run_mcp_live_export_smoke" in source
     assert "Startup smoke passed" in source
     assert "stop_process_tree(frontend" in source
     assert "JOBFILLER_BACKEND_PORT_MAX" in source

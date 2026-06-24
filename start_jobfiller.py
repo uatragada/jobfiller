@@ -8,6 +8,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -36,7 +37,7 @@ def env_int(name: str, default: int) -> int:
 
 
 def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None) -> None:
-    print("+", " ".join(command))
+    print("+", " ".join(command), flush=True)
     completed = subprocess.run(command, cwd=cwd, env=env, check=False)
     if completed.returncode:
         raise SystemExit(f"Command failed with exit code {completed.returncode}: {' '.join(command)}")
@@ -64,7 +65,7 @@ def venv_python_path() -> Path:
 def ensure_python_environment() -> str:
     python = venv_python_path()
     if not python.exists():
-        print("Creating local Python virtual environment in .venv...")
+        print("Creating local Python virtual environment in .venv...", flush=True)
         run([sys.executable, "-m", "venv", str(ROOT / ".venv")])
     try:
         subprocess.run(
@@ -75,7 +76,7 @@ def ensure_python_environment() -> str:
             check=True,
         )
     except subprocess.CalledProcessError:
-        print("Installing backend dependencies from requirements.txt...")
+        print("Installing backend dependencies from requirements.txt...", flush=True)
         run([str(python), "-m", "pip", "install", "-r", str(ROOT / "requirements.txt")])
     return str(python)
 
@@ -92,7 +93,7 @@ def ensure_frontend_dependencies(pm: str) -> None:
     if (FRONTEND_DIR / "node_modules").exists():
         return
     name = package_manager_name(pm)
-    print(f"Installing frontend dependencies with {name}...")
+    print(f"Installing frontend dependencies with {name}...", flush=True)
     if name == "pnpm" and (FRONTEND_DIR / "pnpm-lock.yaml").exists():
         run([pm, "install", "--frozen-lockfile"], cwd=FRONTEND_DIR)
     elif name == "npm" and (FRONTEND_DIR / "package-lock.json").exists():
@@ -179,7 +180,7 @@ def start_process(command: list[str], *, cwd: Path, stdout_path: Path, stderr_pa
 def stop_process_tree(process: subprocess.Popen[bytes] | None, label: str) -> None:
     if process is None or process.poll() is not None:
         return
-    print(f"Stopping {label} PID {process.pid}...")
+    print(f"Stopping {label} PID {process.pid}...", flush=True)
     try:
         if os.name == "nt":
             subprocess.run(
@@ -210,6 +211,20 @@ def write_runtime_config(backend_port: int, frontend_port: int, token: str) -> N
     RUNTIME_CONFIG.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def run_mcp_live_export_smoke(python: str, backend_base: str, token: str) -> None:
+    print("Running MCP live export smoke...", flush=True)
+    env = os.environ.copy()
+    env["JOBFILLER_LOCAL_TOKEN"] = token
+    completed = subprocess.run(
+        [python, "scripts/smoke_mcp.py", "--live-export", "--api-base", backend_base],
+        cwd=ROOT,
+        env=env,
+        check=False,
+    )
+    if completed.returncode:
+        raise SystemExit(f"MCP live export smoke failed with exit code {completed.returncode}.")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Start the local JobFiller backend, dashboard, and MCP runtime config.")
     parser.add_argument(
@@ -223,6 +238,11 @@ def main() -> int:
         default=30.0,
         help="Maximum allowed warm-start time in seconds for --smoke mode.",
     )
+    parser.add_argument(
+        "--mcp-export-smoke",
+        action="store_true",
+        help="In --smoke mode, verify the MCP server can export one job into the temporary smoke backend.",
+    )
     args = parser.parse_args()
 
     started = time.monotonic()
@@ -230,6 +250,7 @@ def main() -> int:
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     backend: subprocess.Popen[bytes] | None = None
     frontend: subprocess.Popen[bytes] | None = None
+    smoke_output_dir: Path | None = None
 
     try:
         python = ensure_python_environment()
@@ -243,13 +264,18 @@ def main() -> int:
 
         backend_port = find_free_port(backend_start, max(backend_start, backend_max))
         backend_base = f"http://127.0.0.1:{backend_port}/api"
+        backend_env = os.environ.copy()
+        if args.smoke:
+            smoke_output_dir = Path(tempfile.mkdtemp(prefix="jobfiller-smoke-"))
+            backend_env["JOBFILLER_OUTPUT_DIR"] = str(smoke_output_dir)
 
-        print(f"Starting JobFiller backend on {backend_base}")
+        print(f"Starting JobFiller backend on {backend_base}", flush=True)
         backend = start_process(
             [python, "-m", "uvicorn", "app.backend.main:app", "--host", "127.0.0.1", "--port", str(backend_port)],
             cwd=ROOT,
             stdout_path=BACKEND_LOG,
             stderr_path=BACKEND_ERR_LOG,
+            env=backend_env,
         )
         token = wait_for_backend(backend_port)
         if backend.poll() is not None:
@@ -275,7 +301,7 @@ def main() -> int:
                     str(candidate_port),
                     "--strictPort",
                 ]
-            print(f"Starting JobFiller dashboard on http://127.0.0.1:{candidate_port}")
+            print(f"Starting JobFiller dashboard on http://127.0.0.1:{candidate_port}", flush=True)
             frontend = start_process(
                 [pm, *frontend_args],
                 cwd=FRONTEND_DIR,
@@ -302,29 +328,33 @@ def main() -> int:
                 f"Frontend did not become ready on ports {frontend_start}-{max(frontend_start, frontend_max)}. "
                 f"Last error: {frontend_error}"
             )
+        if args.smoke and args.mcp_export_smoke:
+            run_mcp_live_export_smoke(python, backend_base, token)
 
         elapsed = round(time.monotonic() - started, 1)
-        print(f"Dashboard: http://127.0.0.1:{frontend_port}")
-        print(f"Backend API base: {backend_base}")
-        print(f"Backend logs: {BACKEND_LOG}")
-        print(f"Frontend logs: {FRONTEND_LOG}")
-        print(f"Startup completed in {elapsed}s.")
+        print(f"Dashboard: http://127.0.0.1:{frontend_port}", flush=True)
+        print(f"Backend API base: {backend_base}", flush=True)
+        print(f"Backend logs: {BACKEND_LOG}", flush=True)
+        print(f"Frontend logs: {FRONTEND_LOG}", flush=True)
+        print(f"Startup completed in {elapsed}s.", flush=True)
         if args.smoke:
             if elapsed > args.startup_budget:
                 raise SystemExit(
                     f"Startup smoke exceeded {args.startup_budget:.1f}s budget: {elapsed}s. "
                     "Warm starts should normally finish under 30 seconds."
                 )
-            print("Startup smoke passed. Runtime config was not updated in smoke mode.")
+            print("Startup smoke passed. Runtime config was not updated in smoke mode.", flush=True)
             return 0
 
         write_runtime_config(backend_port, frontend_port, token)
-        print(f"Runtime config for MCP clients: {RUNTIME_CONFIG}")
+        print(f"Runtime config for MCP clients: {RUNTIME_CONFIG}", flush=True)
         return 0
     finally:
         if args.smoke:
             stop_process_tree(frontend, "frontend")
             stop_process_tree(backend, "backend")
+            if smoke_output_dir:
+                shutil.rmtree(smoke_output_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

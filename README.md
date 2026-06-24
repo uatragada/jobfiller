@@ -29,7 +29,7 @@ Both startup scripts create `.venv` when needed, install runtime Python dependen
 
 The first cold run may take longer while Python and Node packages install. After dependencies are installed, startup should normally be a single warm-start command.
 By default the PowerShell script restarts JobFiller's backend so code changes are picked up. Set `JOBFILLER_REUSE_BACKEND=true` before running the PowerShell script only when you intentionally want to reuse an already-running backend. The Python runner is non-destructive and chooses free ports when defaults are busy.
-For release checks or quick local confidence without leaving servers running, use `python start_jobfiller.py --smoke`.
+For release checks or quick local confidence without leaving servers running, use `python start_jobfiller.py --smoke`. Add `--mcp-export-smoke` to verify the MCP export path against the temporary smoke backend.
 
 - Dashboard: `http://127.0.0.1:5173`
 - Backend API: printed by the startup script, usually `http://127.0.0.1:8001/api`
@@ -60,8 +60,9 @@ Or run the underlying checks individually:
 ```powershell
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
-python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py
+python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py scripts\smoke_mcp.py
 python scripts/doctor.py
+python scripts/smoke_mcp.py
 cd app\frontend
 npm ci
 npm test
@@ -69,8 +70,9 @@ npm run build
 ```
 
 The expected result is a passing backend suite, passing frontend browser-flow tests, and a successful Vite production build.
-`python scripts/verify_release.py` also runs `python start_jobfiller.py --smoke` to prove the app reaches a usable dashboard/API state and cleans up its child processes.
+`python scripts/verify_release.py` also runs `python start_jobfiller.py --smoke --mcp-export-smoke` to prove the app reaches a usable dashboard/API state, verifies a live MCP export against a temporary smoke database, and cleans up its child processes.
 `python scripts/doctor.py` performs a fast clone-readiness check for Python, Node, package manager, config files, and privacy-sensitive ignore rules.
+`python scripts/smoke_mcp.py` launches the bundled stdio MCP server and verifies Codex/Claude export tools are listed and callable.
 
 ## Troubleshooting
 
@@ -129,6 +131,7 @@ JobFiller includes a local stdio MCP server so Codex, Claude Code, and other MCP
 - Practical agent prompts: [docs/agent-workflows.md](docs/agent-workflows.md)
 
 The MCP tools call the same validated bulk-import API and do not submit applications.
+Run `python scripts/smoke_mcp.py` to verify the project MCP configs and stdio server before using an agent client.
 
 Sample seed data lives in [examples/jobs.sample.json](examples/jobs.sample.json).
 Sample MCP export data lives in [examples/mcp-export.sample.json](examples/mcp-export.sample.json).

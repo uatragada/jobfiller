@@ -7,10 +7,11 @@ JobFiller from a fresh clone.
 - `python scripts/verify_release.py` passes.
 - Runtime dependencies stay in `requirements.txt`; test/development dependencies stay in `requirements-dev.txt`; optional PDF-grading extras stay in `requirements-optional.txt`.
 - `python -m pytest -q` passes.
-- `python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py` passes.
+- `python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py scripts\smoke_mcp.py` passes.
 - `python scripts/doctor.py` passes.
+- `python scripts/smoke_mcp.py` launches the stdio MCP server and verifies Codex/Claude export tools.
 - `npm ci`, `npm test`, and `npm run build` pass in `app/frontend`.
-- `python start_jobfiller.py --smoke` starts backend/frontend, verifies readiness, finishes within the warm-start budget, and cleans up child processes.
+- `python start_jobfiller.py --smoke --mcp-export-smoke` starts backend/frontend, verifies readiness, verifies a live MCP export into a temporary smoke database, finishes within the warm-start budget, and cleans up child processes.
 - `.\Start-JobFiller.ps1` starts the backend and dashboard and logs elapsed startup time on Windows.
 - `python start_jobfiller.py` starts the backend and dashboard on a free local port.
 - Dashboard loads at `http://127.0.0.1:5173`.

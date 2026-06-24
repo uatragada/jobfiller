@@ -68,9 +68,14 @@ def main() -> int:
     python = ensure_release_python()
 
     checks: list[tuple[str, list[str], Path]] = [
-        ("Python compile", [python, "-m", "py_compile", "start_jobfiller.py", "scripts/doctor.py", "scripts/verify_release.py"], ROOT),
+        (
+            "Python compile",
+            [python, "-m", "py_compile", "start_jobfiller.py", "scripts/doctor.py", "scripts/verify_release.py", "scripts/smoke_mcp.py"],
+            ROOT,
+        ),
         ("Backend tests", [python, "-m", "pytest", "-q"], ROOT),
         ("Clone doctor", [python, "scripts/doctor.py"], ROOT),
+        ("MCP stdio smoke", [python, "scripts/smoke_mcp.py"], ROOT),
     ]
 
     if not args.skip_npm_ci and not (FRONTEND / "node_modules").exists():
@@ -80,7 +85,7 @@ def main() -> int:
         [
             ("Frontend tests", [npm, "test"], FRONTEND),
             ("Frontend production build", [npm, "run", "build"], FRONTEND),
-            ("Startup smoke", [python, "start_jobfiller.py", "--smoke", "--startup-budget", "30"], ROOT),
+            ("Startup smoke", [python, "start_jobfiller.py", "--smoke", "--mcp-export-smoke", "--startup-budget", "30"], ROOT),
         ]
     )
 

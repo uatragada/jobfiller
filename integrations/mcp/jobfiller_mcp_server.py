@@ -39,6 +39,11 @@ except Exception:  # pragma: no cover - standalone fallback if app package impor
             return "local, private, metadata, or reserved IP addresses are unsafe for job import."
         return None
 
+try:
+    from app.backend.schemas import ImportJobRequest
+except Exception:  # pragma: no cover - standalone fallback if app package import is unavailable.
+    ImportJobRequest = None  # type: ignore[assignment]
+
 
 PROTOCOL_VERSION = "2025-03-26"
 SERVER_INFO = {"name": "jobfiller-mcp", "version": "0.1.0"}
@@ -70,6 +75,25 @@ JOB_RECORD_SCHEMA: dict[str, Any] = {
     },
     "required": ["url"],
     "additionalProperties": True,
+}
+
+
+STRING_LIMITS = {
+    "url": 2048,
+    "company": 200,
+    "title": 240,
+    "location": 200,
+    "work_model": 80,
+    "apply_url": 2048,
+    "role_family": 120,
+    "key_requirements": 5000,
+    "keywords": 2000,
+    "notes": 5000,
+    "posting_age_text": 100,
+    "raw_text": 25000,
+    "materials": 2000,
+    "manual_questions": 2000,
+    "salary": 200,
 }
 
 
@@ -242,8 +266,45 @@ def _validate_jobs(jobs: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]
             continue
         normalized = dict(job)
         normalized["url"] = url
+        schema_error = _schema_validation_error(normalized)
+        if schema_error:
+            errors.append({"index": index, "url": url, "error": schema_error})
+            continue
         valid.append(normalized)
     return valid, errors
+
+
+def _schema_validation_error(job: dict[str, Any]) -> str | None:
+    if ImportJobRequest is not None:
+        try:
+            ImportJobRequest.model_validate(job)
+        except Exception as exc:  # noqa: BLE001 - convert pydantic details into row-level MCP output.
+            return _compact_validation_error(exc)
+        return None
+
+    for field, max_length in STRING_LIMITS.items():
+        value = job.get(field)
+        if value is not None and len(str(value)) > max_length:
+            return f"{field} must be {max_length} characters or fewer."
+    if "fit_score" in job and job.get("fit_score") is not None:
+        try:
+            score = int(job["fit_score"])
+        except (TypeError, ValueError):
+            return "fit_score must be an integer from 0 to 100."
+        if score < 0 or score > 100:
+            return "fit_score must be between 0 and 100."
+    return None
+
+
+def _compact_validation_error(exc: Exception) -> str:
+    errors = getattr(exc, "errors", lambda: [])()
+    if errors:
+        first = errors[0]
+        location = ".".join(str(item) for item in first.get("loc", []))
+        message = str(first.get("msg") or "Invalid value")
+        return f"{location}: {message}" if location else message
+    text = str(exc).strip().splitlines()
+    return text[0] if text else "Invalid job record."
 
 
 def validate_jobfiller_export(arguments: dict[str, Any]) -> dict[str, Any]:

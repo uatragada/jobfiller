@@ -21,6 +21,16 @@ Start JobFiller first:
 
 The startup script writes `outputs/jobfiller-runtime.json` with the selected backend API base and a local mutation token. The MCP server reads that ignored runtime file automatically, so it keeps working if the backend starts on a port other than `8001`. You can still override the API base with `JOBFILLER_API_BASE` when needed, or provide `JOBFILLER_LOCAL_TOKEN` for custom launches.
 
+## Smoke Test
+
+Before connecting an agent client, verify the stdio server and project configs:
+
+```powershell
+python scripts/smoke_mcp.py
+```
+
+The smoke test launches the server the same way Claude Code's project config does, calls `initialize`, lists tools, and validates a sample public job record without contacting the JobFiller API.
+
 ## Codex
 
 This repo includes `.codex/config.toml` with a project-scoped `jobfiller` MCP server:
@@ -56,6 +66,8 @@ claude mcp add --transport stdio jobfiller -- python .\integrations\mcp\jobfille
 ```
 
 Run `/mcp` inside Claude Code to inspect or approve the server.
+
+Project-scoped MCP configs assume Codex or Claude Code is opened from the repository root. Use an absolute script path for machine-level configs or when launching an agent from another working directory.
 
 ## Example Tool Payload
 

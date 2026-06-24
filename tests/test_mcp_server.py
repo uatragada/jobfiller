@@ -85,6 +85,42 @@ def test_mcp_validate_tool_rejects_unsafe_urls() -> None:
     assert payload["error_count"] == 2
 
 
+def test_mcp_validate_tool_matches_backend_field_limits() -> None:
+    response = mcp.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 32,
+            "method": "tools/call",
+            "params": {
+                "name": "validate_jobfiller_export",
+                "arguments": {
+                    "jobs": [
+                        {
+                            "url": "https://example.com/jobs/company-too-long",
+                            "company": "X" * 201,
+                            "title": "Backend Engineer",
+                        },
+                        {
+                            "url": "https://example.com/jobs/score-too-high",
+                            "company": "ScoreCo",
+                            "fit_score": 999,
+                        },
+                    ]
+                },
+            },
+        }
+    )
+
+    assert response is not None
+    payload = json.loads(response["result"]["content"][0]["text"])
+    assert payload["valid"] is False
+    assert payload["valid_count"] == 0
+    assert payload["error_count"] == 2
+    assert {error["index"] for error in payload["errors"]} == {0, 1}
+    assert "company" in payload["errors"][0]["error"].lower()
+    assert "fit_score" in payload["errors"][1]["error"].lower()
+
+
 def test_mcp_export_rejects_remote_api_base() -> None:
     response = mcp.handle_request(
         {
