@@ -1985,6 +1985,12 @@ function ModelHealthPage({ modelHealth, runAction }) {
     <>
       <PageHeader title="Model Health"><button className="blueButton" data-testid="model-health-refresh" onClick={() => runAction(api.modelHealth, "Model health refreshed.")}><Activity size={14} /> Test Local LLM</button></PageHeader>
       <div className="healthGrid">
+        {!modelHealth && (
+          <div className="infoCard" data-testid="model-health-loading" aria-busy="true">
+            <strong>Checking local services</strong>
+            <p>Waiting for backend and local LLM status.</p>
+          </div>
+        )}
         {entries.map(([key, value]) => (
           <div className="infoCard" key={key}>
             <strong>{key}</strong>

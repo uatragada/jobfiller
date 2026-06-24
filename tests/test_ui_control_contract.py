@@ -90,6 +90,7 @@ def test_srs_page_controls_have_stable_testids() -> None:
         'data-testid="export-workbook"',
         'data-testid="settings-save"',
         'data-testid="model-health-refresh"',
+        'data-testid="model-health-loading"',
         # Detail panel and modals.
         'data-testid="inspector-close"',
         'data-testid="grade-open-report"',
