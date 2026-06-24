@@ -6,7 +6,6 @@ The app helps prepare materials only. It never submits applications or clicks a 
 
 ## Prerequisites
 
-- Windows PowerShell
 - Python 3.10 or newer
 - Node.js 20.19 or newer
 - `npm` (bundled with Node.js); `pnpm` is also supported
@@ -20,10 +19,16 @@ From the repository root:
 .\Start-JobFiller.ps1
 ```
 
-The startup script creates `.venv` when needed, installs Python dependencies from `requirements.txt`, installs frontend dependencies, starts the backend, and starts the Vite dashboard.
+For macOS, Linux, or a Python-only startup path on Windows:
+
+```bash
+python start_jobfiller.py
+```
+
+Both startup scripts create `.venv` when needed, install Python dependencies from `requirements.txt`, install frontend dependencies, start the backend, and start the Vite dashboard.
 
 The first cold run may take longer while Python and Node packages install. After dependencies are installed, startup should normally be a single warm-start command.
-By default the script restarts JobFiller's backend so code changes are picked up. Set `JOBFILLER_REUSE_BACKEND=true` before running the script only when you intentionally want to reuse an already-running backend.
+By default the PowerShell script restarts JobFiller's backend so code changes are picked up. Set `JOBFILLER_REUSE_BACKEND=true` before running the PowerShell script only when you intentionally want to reuse an already-running backend. The Python runner is non-destructive and chooses free ports when defaults are busy.
 
 - Dashboard: `http://127.0.0.1:5173`
 - Backend API: printed by the startup script, usually `http://127.0.0.1:8001/api`
@@ -37,6 +42,7 @@ Useful startup overrides:
 $env:JOBFILLER_BACKEND_PORT = "8001"
 $env:JOBFILLER_BACKEND_PORT_MAX = "8005"
 $env:JOBFILLER_FRONTEND_PORT = "5173"
+$env:JOBFILLER_FRONTEND_PORT_MAX = "5177"
 $env:JOBFILLER_REUSE_BACKEND = "true"   # optional; reuse instead of restart
 ```
 
@@ -46,6 +52,7 @@ Run the backend and frontend checks before sharing a branch or release:
 
 ```powershell
 python -m pytest -q
+python -m py_compile start_jobfiller.py
 cd app\frontend
 npm ci
 npm test
@@ -56,11 +63,12 @@ The expected result is a passing backend suite, passing frontend browser-flow te
 
 ## Troubleshooting
 
-- If the dashboard says it cannot fetch data, restart with `.\Start-JobFiller.ps1` and check the backend URL printed by the script. Do not set `JOBFILLER_REUSE_BACKEND=true` while debugging stale backend behavior.
+- If the dashboard says it cannot fetch data, restart with `.\Start-JobFiller.ps1` or `python start_jobfiller.py` and check the backend URL printed by the script. Do not set `JOBFILLER_REUSE_BACKEND=true` while debugging stale backend behavior.
 - Backend logs are written to `artifacts/jobfiller-backend-current.log` and `artifacts/jobfiller-backend-current.err.log`.
 - Frontend logs are written to `artifacts/jobfiller-frontend-current.log` and `artifacts/jobfiller-frontend-current.err.log`.
 - If port `5173` is busy, stop the existing Vite process and rerun the start script.
 - If backend ports `8001-8005` are busy, stop the conflicting local services or widen the scan with `JOBFILLER_BACKEND_PORT_MAX`.
+- If frontend ports `5173-5177` are busy when using the Python runner, widen the scan with `JOBFILLER_FRONTEND_PORT_MAX`.
 - Set `JOBFILLER_PYTHON`, `JOBFILLER_NPM`, or `JOBFILLER_PNPM` to known executable paths if auto-detection picks the wrong runtime.
 
 ## Settings And Profile

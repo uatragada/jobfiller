@@ -30,6 +30,9 @@ jobs:
       - name: Run backend tests
         run: python -m pytest -q
 
+      - name: Check cross-platform startup script syntax
+        run: python -m py_compile start_jobfiller.py
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:

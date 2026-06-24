@@ -45,6 +45,7 @@ Run these before publishing:
 
 ```powershell
 python -m pytest -q
+python -m py_compile start_jobfiller.py
 cd app\frontend
 npm ci
 npm test
@@ -55,6 +56,12 @@ Then confirm the app starts locally:
 
 ```powershell
 .\Start-JobFiller.ps1
+```
+
+or:
+
+```powershell
+python start_jobfiller.py
 ```
 
 Warm startup should normally complete in under 30 seconds once dependencies
