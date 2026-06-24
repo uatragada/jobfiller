@@ -29,8 +29,13 @@ try {
         throw "Could not determine current git branch."
     }
 
-    $remote = git remote get-url origin 2>$null
-    if ($LASTEXITCODE -eq 0 -and $remote) {
+    $remoteNames = @(git remote)
+    $remote = ""
+    if ($remoteNames -contains "origin") {
+        $remote = (git remote get-url origin).Trim()
+    }
+
+    if ($remote) {
         Write-Host "Pushing existing origin on branch $branch."
         git push -u origin $branch
         exit $LASTEXITCODE
