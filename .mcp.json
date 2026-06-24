@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "jobfiller": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["integrations/mcp/jobfiller_mcp_server.py"]
+    }
+  }
+}

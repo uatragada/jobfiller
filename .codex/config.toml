@@ -1,0 +1,10 @@
+[mcp_servers.jobfiller]
+command = "python"
+args = ["integrations/mcp/jobfiller_mcp_server.py"]
+startup_timeout_sec = 10
+tool_timeout_sec = 120
+enabled_tools = [
+  "export_jobs_to_jobfiller",
+  "validate_jobfiller_export",
+  "jobfiller_status",
+]

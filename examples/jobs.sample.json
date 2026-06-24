@@ -1,0 +1,47 @@
+[
+  {
+    "url": "https://example.com/jobs/backend-software-engineer",
+    "company": "Northstar Analytics",
+    "title": "Backend Software Engineer",
+    "location": "Remote",
+    "work_model": "Remote",
+    "apply_url": "https://example.com/jobs/backend-software-engineer/apply",
+    "role_family": "Software Engineering",
+    "key_requirements": "Python; REST APIs; SQL; automated testing",
+    "keywords": "Python; FastAPI; PostgreSQL; pytest; API design",
+    "fit_score": 86,
+    "posting_age_text": "2 days ago",
+    "salary": "Not listed",
+    "notes": "Generic sample record for local development and agent import testing."
+  },
+  {
+    "url": "https://example.com/jobs/finance-data-platform-analyst",
+    "company": "Harbor Cloud",
+    "title": "Finance Data Platform Analyst",
+    "location": "Remote - Candidate Country",
+    "work_model": "Remote",
+    "apply_url": "https://example.com/jobs/finance-data-platform-analyst/apply",
+    "role_family": "Data",
+    "key_requirements": "SQL; financial reporting; trading data quality; stakeholder communication",
+    "keywords": "SQL; finance; trading; data validation; BI; reporting",
+    "fit_score": 82,
+    "posting_age_text": "4 days ago",
+    "salary": "Not listed",
+    "notes": "Remote-first sample record with non-personal placeholder details."
+  },
+  {
+    "url": "https://example.com/jobs/full-stack-application-engineer",
+    "company": "Atlas Health Tech",
+    "title": "Full Stack Application Engineer",
+    "location": "Remote - North America",
+    "work_model": "Remote",
+    "apply_url": "https://example.com/jobs/full-stack-application-engineer/apply",
+    "role_family": "Software Engineering",
+    "key_requirements": "React; backend APIs; accessibility; product collaboration",
+    "keywords": "React; JavaScript; API integration; accessibility; testing",
+    "fit_score": 84,
+    "posting_age_text": "1 week ago",
+    "salary": "Not listed",
+    "notes": "Generic sample role suitable for import contract examples."
+  }
+]

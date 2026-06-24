@@ -1,0 +1,60 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+app/frontend/node_modules/
+dist/
+app/frontend/dist/
+.npm/
+.pnpm-store/
+
+# Local app outputs
+outputs/
+artifacts/
+.env
+.env.*
+*.local
+*.db
+*.sqlite
+*.sqlite3
+*.log
+app-start.log
+
+# Caches and temporary files
+.cache/
+cache/
+tmp/
+temp/
+.tmp*
+tmp_*
+*.tmp
+*.bak
+
+# Personal generated documents and exports
+generated-docs/
+personal/
+private/
+*Cover Letter*.md
+*cover-letter*.md
+*Resume*.pdf
+*resume*.pdf
+*application-package*
+*.docx
+*.xlsx
+*.csv
+
+# Keep public docs and samples visible
+!README.md
+!docs/**/*.md
+!examples/**/*.json
+!helpers/README.md
+!helpers/**/*.ps1

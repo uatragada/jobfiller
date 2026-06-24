@@ -1,0 +1,29 @@
+{
+  "name": "jobfiller-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.11.0",
+  "engines": {
+    "node": ">=20.19.0",
+    "npm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node tests/button-flows.mjs && node tests/downloads.mjs && node tests/performance.mjs",
+    "test:buttons": "node tests/button-flows.mjs",
+    "test:downloads": "node tests/downloads.mjs",
+    "test:performance": "node tests/performance.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "1.21.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "playwright": "1.61.0",
+    "vite": "8.0.16"
+  }
+}
