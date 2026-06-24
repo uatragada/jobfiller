@@ -1,5 +1,6 @@
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+$ScriptStartedAt = Get-Date
 
 function Write-Output {
     param([Parameter(ValueFromRemainingArguments = $true)] [object[]]$InputObject)
@@ -21,9 +22,21 @@ $NpmCandidate = $env:JOBFILLER_NPM
 
 $BackendHost = "127.0.0.1"
 $BackendPortStart = 8001
-$BackendPortMaxScan = 8120
+if ($env:JOBFILLER_BACKEND_PORT) {
+    $BackendPortStart = [int]$env:JOBFILLER_BACKEND_PORT
+}
+$BackendPortMaxScan = $BackendPortStart + 4
+if ($env:JOBFILLER_BACKEND_PORT_MAX) {
+    $BackendPortMaxScan = [int]$env:JOBFILLER_BACKEND_PORT_MAX
+}
+if ($BackendPortMaxScan -lt $BackendPortStart) {
+    $BackendPortMaxScan = $BackendPortStart
+}
 $BackendPort = $null
 $FrontendPort = 5173
+if ($env:JOBFILLER_FRONTEND_PORT) {
+    $FrontendPort = [int]$env:JOBFILLER_FRONTEND_PORT
+}
 $FrontendDir = Join-Path $Root "app\frontend"
 $OutputsDir = Join-Path $Root "outputs"
 $LogsDir = Join-Path $Root "artifacts"
@@ -599,6 +612,9 @@ try {
     if (-not $frontendStarted) {
         throw "Failed to start frontend after $FrontendScanAttempts attempts."
     }
+
+    $elapsedSeconds = [math]::Round(((Get-Date) - $ScriptStartedAt).TotalSeconds, 1)
+    Write-Output "Startup completed in ${elapsedSeconds}s."
 } finally {
     Stop-Transcript | Out-Null
 }

@@ -31,6 +31,15 @@ By default the script restarts JobFiller's backend so code changes are picked up
 - Local settings and database: `outputs/`
 - MCP runtime port file: `outputs/jobfiller-runtime.json`
 
+Useful startup overrides:
+
+```powershell
+$env:JOBFILLER_BACKEND_PORT = "8001"
+$env:JOBFILLER_BACKEND_PORT_MAX = "8005"
+$env:JOBFILLER_FRONTEND_PORT = "5173"
+$env:JOBFILLER_REUSE_BACKEND = "true"   # optional; reuse instead of restart
+```
+
 ## Validation
 
 Run the backend and frontend checks before sharing a branch or release:
@@ -51,7 +60,8 @@ The expected result is a passing backend suite, passing frontend browser-flow te
 - Backend logs are written to `artifacts/jobfiller-backend-current.log` and `artifacts/jobfiller-backend-current.err.log`.
 - Frontend logs are written to `artifacts/jobfiller-frontend-current.log` and `artifacts/jobfiller-frontend-current.err.log`.
 - If port `5173` is busy, stop the existing Vite process and rerun the start script.
-- If backend ports `8001-8120` are busy, stop the conflicting local services or set `JOBFILLER_PYTHON`, `JOBFILLER_NPM`, or `JOBFILLER_PNPM` to known executable paths before rerunning.
+- If backend ports `8001-8005` are busy, stop the conflicting local services or widen the scan with `JOBFILLER_BACKEND_PORT_MAX`.
+- Set `JOBFILLER_PYTHON`, `JOBFILLER_NPM`, or `JOBFILLER_PNPM` to known executable paths if auto-detection picks the wrong runtime.
 
 ## Settings And Profile
 
