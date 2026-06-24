@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -17,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND_DIR = ROOT / "app" / "frontend"
+FRONTEND_DIST = FRONTEND_DIR / "dist"
 OUTPUTS_DIR = ROOT / "outputs"
 LOGS_DIR = ROOT / "artifacts"
 BACKEND_LOG = LOGS_DIR / "jobfiller-backend-current.log"
@@ -24,6 +26,7 @@ BACKEND_ERR_LOG = LOGS_DIR / "jobfiller-backend-current.err.log"
 FRONTEND_LOG = LOGS_DIR / "jobfiller-frontend-current.log"
 FRONTEND_ERR_LOG = LOGS_DIR / "jobfiller-frontend-current.err.log"
 RUNTIME_CONFIG = OUTPUTS_DIR / "jobfiller-runtime.json"
+STATIC_ASSET_REF_RE = re.compile(r"""(?:src|href)=["']([^"']+)["']""", re.IGNORECASE)
 
 
 def env_int(name: str, default: int) -> int:
@@ -115,10 +118,39 @@ def find_free_port(start: int, max_port: int, host: str = "127.0.0.1") -> int:
     raise SystemExit(f"No free port found in range {start}-{max_port}.")
 
 
+def local_frontend_origins(start: int, max_port: int) -> str:
+    origins = []
+    for port in range(start, max(start, max_port) + 1):
+        origins.extend([f"http://127.0.0.1:{port}", f"http://localhost:{port}"])
+    configured = [origin.strip() for origin in os.environ.get("JOBFILLER_ALLOWED_ORIGINS", "").split(",") if origin.strip()]
+    return ",".join(dict.fromkeys([*origins, *configured]))
+
+
 def http_json(url: str, headers: dict[str, str] | None = None, timeout: float = 2.0) -> dict[str, object]:
     request = urllib.request.Request(url, headers=headers or {})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def dashboard_asset_paths(index_html: str) -> list[str]:
+    paths: list[str] = []
+    for match in STATIC_ASSET_REF_RE.finditer(index_html):
+        path = match.group(1).strip()
+        if path.startswith("/assets/") or path.startswith("assets/"):
+            paths.append("/" + path.lstrip("/"))
+    return sorted(set(paths))
+
+
+def verify_static_asset(base_url: str, asset_path: str) -> None:
+    with urllib.request.urlopen(f"{base_url}{asset_path}", timeout=2) as response:
+        content_type = response.headers.get("content-type", "").lower()
+        body = response.read(80).decode("utf-8", errors="ignore").strip().lower()
+    if asset_path.endswith(".js") and "javascript" not in content_type:
+        raise RuntimeError(f"{asset_path} returned {content_type or 'no content type'} instead of JavaScript.")
+    if asset_path.endswith(".css") and "text/css" not in content_type:
+        raise RuntimeError(f"{asset_path} returned {content_type or 'no content type'} instead of CSS.")
+    if body.startswith("<!doctype") or body.startswith("<html"):
+        raise RuntimeError(f"{asset_path} returned dashboard HTML instead of a static asset.")
 
 
 def wait_for_backend(port: int, timeout_seconds: float = 20.0) -> str:
@@ -157,6 +189,32 @@ def wait_for_frontend(frontend_port: int, backend_port: int, token: str, timeout
             last_error = str(exc)
         time.sleep(0.35)
     raise SystemExit(f"Frontend did not become ready on {frontend_url}. Last error: {last_error}")
+
+
+def wait_for_static_dashboard(backend_port: int, token: str, timeout_seconds: float = 20.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    frontend_url = f"http://127.0.0.1:{backend_port}"
+    jobs_url = f"http://127.0.0.1:{backend_port}/api/jobs?sort=newest&remote_first=true"
+    headers = {"X-JobFiller-Token": token}
+    last_error = ""
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(frontend_url, timeout=2) as response:
+                content_type = response.headers.get("content-type", "")
+                frontend_ok = response.status == 200 and "text/html" in content_type.lower()
+                index_html = response.read().decode("utf-8", errors="replace")
+            asset_paths = dashboard_asset_paths(index_html)
+            if not asset_paths:
+                raise RuntimeError("dashboard index did not reference built assets")
+            for asset_path in asset_paths:
+                verify_static_asset(frontend_url, asset_path)
+            jobs = http_json(jobs_url, headers=headers)
+            if frontend_ok and isinstance(jobs, list):
+                return
+        except (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            last_error = str(exc)
+        time.sleep(0.35)
+    raise SystemExit(f"Static dashboard did not become ready on {frontend_url}. Last error: {last_error}")
 
 
 def start_process(command: list[str], *, cwd: Path, stdout_path: Path, stderr_path: Path, env: dict[str, str] | None = None) -> subprocess.Popen[bytes]:
@@ -243,7 +301,14 @@ def main() -> int:
         action="store_true",
         help="In --smoke mode, verify the MCP server can export one job into the temporary smoke backend.",
     )
+    parser.add_argument(
+        "--dev-frontend",
+        action="store_true",
+        help="Run the Vite development frontend even when a built static dashboard is available.",
+    )
     args = parser.parse_args()
+    dev_frontend = args.dev_frontend or os.environ.get("JOBFILLER_DEV_FRONTEND", "").strip().lower() in {"1", "true", "yes"}
+    use_static_dashboard = (FRONTEND_DIST / "index.html").exists() and not dev_frontend
 
     started = time.monotonic()
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -254,8 +319,9 @@ def main() -> int:
 
     try:
         python = ensure_python_environment()
-        pm = package_manager()
-        ensure_frontend_dependencies(pm)
+        pm = "" if use_static_dashboard else package_manager()
+        if not use_static_dashboard:
+            ensure_frontend_dependencies(pm)
 
         backend_start = env_int("JOBFILLER_BACKEND_PORT", 8001)
         backend_max = env_int("JOBFILLER_BACKEND_PORT_MAX", backend_start + 4)
@@ -265,6 +331,8 @@ def main() -> int:
         backend_port = find_free_port(backend_start, max(backend_start, backend_max))
         backend_base = f"http://127.0.0.1:{backend_port}/api"
         backend_env = os.environ.copy()
+        if not use_static_dashboard:
+            backend_env["JOBFILLER_ALLOWED_ORIGINS"] = local_frontend_origins(frontend_start, frontend_max)
         if args.smoke:
             smoke_output_dir = Path(tempfile.mkdtemp(prefix="jobfiller-smoke-"))
             backend_env["JOBFILLER_OUTPUT_DIR"] = str(smoke_output_dir)
@@ -281,58 +349,64 @@ def main() -> int:
         if backend.poll() is not None:
             raise SystemExit(f"Backend exited early. Check {BACKEND_ERR_LOG}")
 
-        pm_name = package_manager_name(pm)
-        frontend_port = 0
-        frontend_error = ""
-        for candidate_port in range(frontend_start, max(frontend_start, frontend_max) + 1):
-            if not is_port_free(candidate_port):
-                continue
-            frontend_env = os.environ.copy()
-            frontend_env["VITE_API_BASE"] = backend_base
-            frontend_args = ["dev", "--host", "127.0.0.1", "--port", str(candidate_port), "--strictPort"]
-            if pm_name == "npm":
-                frontend_args = [
-                    "run",
-                    "dev",
-                    "--",
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(candidate_port),
-                    "--strictPort",
-                ]
-            print(f"Starting JobFiller dashboard on http://127.0.0.1:{candidate_port}", flush=True)
-            frontend = start_process(
-                [pm, *frontend_args],
-                cwd=FRONTEND_DIR,
-                stdout_path=FRONTEND_LOG,
-                stderr_path=FRONTEND_ERR_LOG,
-                env=frontend_env,
-            )
-            time.sleep(0.5)
-            if frontend.poll() is not None:
-                frontend_error = f"Frontend exited early on port {candidate_port}. Check {FRONTEND_ERR_LOG}"
-                frontend = None
-                continue
-            try:
-                wait_for_frontend(candidate_port, backend_port, token, timeout_seconds=10.0)
-            except SystemExit as exc:
-                frontend_error = str(exc)
-                stop_process_tree(frontend, "frontend")
-                frontend = None
-                continue
-            frontend_port = candidate_port
-            break
-        if frontend is None or not frontend_port:
-            raise SystemExit(
-                f"Frontend did not become ready on ports {frontend_start}-{max(frontend_start, frontend_max)}. "
-                f"Last error: {frontend_error}"
-            )
+        if use_static_dashboard:
+            print(f"Using built dashboard from {FRONTEND_DIST}", flush=True)
+            wait_for_static_dashboard(backend_port, token, timeout_seconds=10.0)
+            frontend_port = backend_port
+        else:
+            pm_name = package_manager_name(pm)
+            frontend_port = 0
+            frontend_error = ""
+            for candidate_port in range(frontend_start, max(frontend_start, frontend_max) + 1):
+                if not is_port_free(candidate_port):
+                    continue
+                frontend_env = os.environ.copy()
+                frontend_env["VITE_API_BASE"] = backend_base
+                frontend_args = ["dev", "--host", "127.0.0.1", "--port", str(candidate_port), "--strictPort"]
+                if pm_name == "npm":
+                    frontend_args = [
+                        "run",
+                        "dev",
+                        "--",
+                        "--host",
+                        "127.0.0.1",
+                        "--port",
+                        str(candidate_port),
+                        "--strictPort",
+                    ]
+                print(f"Starting JobFiller dashboard on http://127.0.0.1:{candidate_port}", flush=True)
+                frontend = start_process(
+                    [pm, *frontend_args],
+                    cwd=FRONTEND_DIR,
+                    stdout_path=FRONTEND_LOG,
+                    stderr_path=FRONTEND_ERR_LOG,
+                    env=frontend_env,
+                )
+                time.sleep(0.5)
+                if frontend.poll() is not None:
+                    frontend_error = f"Frontend exited early on port {candidate_port}. Check {FRONTEND_ERR_LOG}"
+                    frontend = None
+                    continue
+                try:
+                    wait_for_frontend(candidate_port, backend_port, token, timeout_seconds=10.0)
+                except SystemExit as exc:
+                    frontend_error = str(exc)
+                    stop_process_tree(frontend, "frontend")
+                    frontend = None
+                    continue
+                frontend_port = candidate_port
+                break
+            if frontend is None or not frontend_port:
+                raise SystemExit(
+                    f"Frontend did not become ready on ports {frontend_start}-{max(frontend_start, frontend_max)}. "
+                    f"Last error: {frontend_error}"
+                )
         if args.smoke and args.mcp_export_smoke:
             run_mcp_live_export_smoke(python, backend_base, token)
 
         elapsed = round(time.monotonic() - started, 1)
-        print(f"Dashboard: http://127.0.0.1:{frontend_port}", flush=True)
+        dashboard_url = f"http://127.0.0.1:{frontend_port}"
+        print(f"Dashboard: {dashboard_url}", flush=True)
         print(f"Backend API base: {backend_base}", flush=True)
         print(f"Backend logs: {BACKEND_LOG}", flush=True)
         print(f"Frontend logs: {FRONTEND_LOG}", flush=True)

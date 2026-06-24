@@ -52,8 +52,9 @@ Or run the same checks manually:
 ```powershell
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
-python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py
+python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py scripts\smoke_mcp.py
 python scripts/doctor.py
+python scripts/smoke_mcp.py
 cd app\frontend
 npm ci
 npm test
@@ -72,10 +73,11 @@ or:
 python start_jobfiller.py
 ```
 
-Warm startup should normally complete in under 30 seconds once dependencies
-are installed. Cold startup depends on Python and npm package download speed.
-The release verifier enforces this warm-start expectation with
-`python start_jobfiller.py --smoke --startup-budget 30`.
+Startup should normally complete in under 30 seconds from a fresh clone because
+the dashboard build is committed and served by FastAPI. Frontend dependencies
+are only required when rebuilding `app/frontend/dist` or developing the UI.
+The release verifier enforces the startup expectation with
+`python start_jobfiller.py --smoke --mcp-export-smoke --startup-budget 30`.
 
 ## Privacy Boundary
 

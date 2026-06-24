@@ -13,7 +13,6 @@ htmlcov/
 node_modules/
 app/frontend/node_modules/
 dist/
-app/frontend/dist/
 .npm/
 .pnpm-store/
 
@@ -57,5 +56,7 @@ private/
 !README.md
 !docs/**/*.md
 !examples/**/*.json
+!app/frontend/dist/
+!app/frontend/dist/**
 !helpers/README.md
 !helpers/**/*.ps1

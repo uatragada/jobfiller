@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.backend.database import Base
 from app.backend.models import Job, ProfileFact, Question
 from app.backend.services.ingestion import upsert_job
-from app.backend.services.ingestion import run_scan
+from app.backend.services.ingestion import import_chrome_job_tabs, run_scan
 from app.backend.services.missing_info import ensure_questions
 from app.backend.services.processor import answer_question, apply_fact_to_tagged_open_questions, process_job, grade_artifact
 from app.backend.services.artifacts import generate_artifacts, update_artifact_text
@@ -200,6 +200,23 @@ def test_generic_real_users_phrase_does_not_create_metrics_blocker() -> None:
     assert ensure_questions(db, job) == []
 
 
+def test_generic_repository_phrase_does_not_create_finance_blocker() -> None:
+    db = make_db()
+    job = upsert_job(
+        db,
+        {
+            "url": "https://www.linkedin.com/jobs/view/334",
+            "company": "ExampleCo",
+            "title": "Software Engineer",
+            "key_requirements": "Maintain application repositories and API integrations",
+            "keywords": "GitHub; backend; APIs",
+            "raw_text": "Own code repositories, pull requests, and release automation.",
+        },
+    )
+
+    assert all(question.tag != "finance_motivation" for question in ensure_questions(db, job))
+
+
 def test_run_scan_updates_run_metadata() -> None:
     db = make_db()
     run = Run(kind="manual_scan", status="RUNNING", message="manual scan start")
@@ -251,6 +268,34 @@ def test_run_scan_filters_by_scanner_keywords() -> None:
 
     assert imported > 0
     assert "seeded/current" in message
+
+
+def test_chrome_scan_imports_common_ats_job_tabs(monkeypatch) -> None:
+    db = make_db()
+    monkeypatch.setattr(
+        "app.backend.services.ingestion.chrome_debug_tabs",
+        lambda: [
+            {
+                "url": "https://boards.greenhouse.io/example/jobs/1234567",
+                "title": "Backend Engineer - Example Systems - Remote",
+            },
+            {
+                "url": "https://jobs.lever.co/acme/abc123",
+                "title": "Data Analyst | Acme Analytics | Hybrid",
+            },
+            {
+                "url": "https://example.com/blog/not-a-job",
+                "title": "Company Blog",
+            },
+        ],
+    )
+
+    jobs = import_chrome_job_tabs(db, remote_first=True)
+
+    assert len(jobs) == 2
+    assert {job.source for job in jobs} == {"chrome"}
+    assert {job.company for job in jobs} == {"Example Systems", "Acme Analytics"}
+    assert any(job.work_model == "Remote" for job in jobs)
 
 
 def test_artifact_paths_follow_output_contract(monkeypatch) -> None:

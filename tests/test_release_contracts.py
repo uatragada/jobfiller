@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import re
+import subprocess
 
 from app.backend import __version__
 
@@ -12,6 +14,7 @@ def test_release_artifacts_exist_for_github_distribution() -> None:
         Path("requirements.txt"),
         Path("requirements-dev.txt"),
         Path("requirements-optional.txt"),
+        Path("app/frontend/dist/index.html"),
         Path("start_jobfiller.py"),
         Path("scripts/doctor.py"),
         Path("scripts/verify_release.py"),
@@ -32,6 +35,23 @@ def test_release_artifacts_exist_for_github_distribution() -> None:
 
     for path in required_paths:
         assert path.exists(), f"Missing release artifact: {path}"
+
+
+def test_static_dashboard_assets_are_tracked_for_clean_clones() -> None:
+    index_path = Path("app/frontend/dist/index.html")
+    index_html = index_path.read_text(encoding="utf-8")
+    asset_paths = [
+        Path("app/frontend/dist") / match.lstrip("/")
+        for match in re.findall(r"""(?:src|href)=["']([^"']+)["']""", index_html)
+        if match.startswith("/assets/") or match.startswith("assets/")
+    ]
+    required_paths = [index_path, *asset_paths]
+
+    assert asset_paths, "Dashboard index should reference built JS/CSS assets."
+    for path in required_paths:
+        assert path.exists(), f"Missing built dashboard asset: {path}"
+        tracked = subprocess.run(["git", "ls-files", "--", str(path)], capture_output=True, text=True, check=False)
+        assert tracked.stdout.strip(), f"Built dashboard asset is not tracked by git: {path}"
 
 
 def test_ci_runs_backend_and_frontend_validation() -> None:
@@ -75,6 +95,7 @@ def test_default_runtime_dependencies_stay_lean() -> None:
     assert "httpx" not in runtime_requirements
     assert "pdfplumber" not in runtime_requirements
     assert "reportlab" not in runtime_requirements
+    assert "openpyxl" not in runtime_requirements
     assert "pytest==9.1.1" in dev_requirements
     assert "httpx2==2.4.0" in dev_requirements
     assert "pdfplumber==0.11.10" in optional_requirements
@@ -102,6 +123,13 @@ def test_cross_platform_start_script_writes_mcp_runtime_config() -> None:
     assert "stop_process_tree(frontend" in source
     assert "JOBFILLER_BACKEND_PORT_MAX" in source
     assert "JOBFILLER_FRONTEND_PORT_MAX" in source
+    assert "JOBFILLER_DEV_FRONTEND" in source
+    assert "FRONTEND_DIST" in source
+    assert "wait_for_static_dashboard" in source
+    assert "dashboard_asset_paths" in source
+    assert "verify_static_asset" in source
+    assert "local_frontend_origins" in source
+    assert "JOBFILLER_ALLOWED_ORIGINS" in source
     assert "frontend_start + 20" in source
     assert "--strictPort" in source
     assert "Startup completed in" in source
@@ -120,6 +148,9 @@ def test_clone_readiness_docs_and_examples_cover_agent_imports() -> None:
     assert "export_jobs_to_jobfiller" in workflow_doc
     assert "Do not apply" in workflow_doc
     assert '"process": false' in sample
+    mcp_doc = Path("docs/mcp-integration.md").read_text(encoding="utf-8")
+    assert "python scripts/smoke_mcp.py --live-export" in mcp_doc
+    assert "materials`, `manual_questions`, and `raw_text` are text fields" in mcp_doc
 
 
 def test_env_example_is_tracked_but_real_env_files_are_ignored() -> None:

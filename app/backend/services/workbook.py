@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 import csv
+import zipfile
 from pathlib import Path
+from xml.sax.saxutils import escape
 
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,49 +20,177 @@ JSON_EXPORT_PATH = OUTPUT_ROOT / "jobfiller-feedback-loop.json"
 CSV_EXPORT_PATH = OUTPUT_ROOT / "jobfiller-feedback-loop.csv"
 
 
-def _add_sheet(workbook: Workbook, title: str, headers: list[str], rows: list[list[object]]) -> None:
-    sheet = workbook.create_sheet(title)
-    sheet.append(headers)
-    for row in rows:
-        sheet.append(row)
+WIDTHS = {
+    "Company": 18,
+    "Title": 36,
+    "Location": 18,
+    "Key Requirements": 42,
+    "Keywords": 36,
+    "Salary": 18,
+    "Materials Needed": 40,
+    "Source URL": 52,
+    "Apply URL": 52,
+    "Resume PDF Path": 58,
+    "Resume LaTeX Path": 58,
+    "Cover Letter Path": 58,
+    "Manual Writing Questions": 42,
+    "Local LLM Risks": 70,
+    "Cover Letter Text": 90,
+    "Action": 56,
+    "Files": 60,
+}
 
-    header_fill = PatternFill("solid", fgColor="1F4E78")
-    for cell in sheet[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = header_fill
-        cell.alignment = Alignment(wrap_text=True, vertical="top")
 
-    widths = {
-        "Company": 18,
-        "Title": 36,
-        "Location": 18,
-        "Key Requirements": 42,
-        "Keywords": 36,
-        "Salary": 18,
-        "Materials Needed": 40,
-        "Source URL": 52,
-        "Apply URL": 52,
-        "Resume PDF Path": 58,
-        "Resume LaTeX Path": 58,
-        "Cover Letter Path": 58,
-        "Manual Writing Questions": 42,
-        "Local LLM Risks": 70,
-        "Cover Letter Text": 90,
-        "Action": 56,
-        "Files": 60,
-    }
-    for idx, column_cells in enumerate(sheet.columns, start=1):
-        header = str(column_cells[0].value)
-        sheet.column_dimensions[get_column_letter(idx)].width = widths.get(header, 18)
-        for cell in column_cells:
-            cell.alignment = Alignment(wrap_text=True, vertical="top")
-    sheet.freeze_panes = "A2"
+def _column_name(index: int) -> str:
+    result = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+def _xml_text(value: object) -> str:
+    return escape(str(value), {'"': "&quot;"})
+
+
+def _cell_xml(row_index: int, column_index: int, value: object, *, header: bool = False) -> str:
+    reference = f"{_column_name(column_index)}{row_index}"
+    style = ' s="1"' if header else ' s="0"'
+    if value is None or value == "":
+        return f'<c r="{reference}"{style}/>'
+    if isinstance(value, bool):
+        return f'<c r="{reference}" t="b"{style}><v>{1 if value else 0}</v></c>'
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f'<c r="{reference}"{style}><v>{value}</v></c>'
+    return f'<c r="{reference}" t="inlineStr"{style}><is><t xml:space="preserve">{_xml_text(value)}</t></is></c>'
+
+
+def _sheet_xml(headers: list[str], rows: list[list[object]]) -> str:
+    column_xml = []
+    for index, header in enumerate(headers, start=1):
+        width = WIDTHS.get(header, 18)
+        column_xml.append(f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>')
+
+    row_xml = [
+        '<row r="1">' + "".join(_cell_xml(1, index, header, header=True) for index, header in enumerate(headers, start=1)) + "</row>"
+    ]
+    for row_index, row in enumerate(rows, start=2):
+        cells = [_cell_xml(row_index, index, value) for index, value in enumerate(row, start=1)]
+        row_xml.append(f'<row r="{row_index}">{"".join(cells)}</row>')
+
+    last_column = _column_name(max(1, len(headers)))
+    last_row = max(1, len(rows) + 1)
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f'<dimension ref="A1:{last_column}{last_row}"/>'
+        '<sheetViews><sheetView workbookViewId="0">'
+        '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
+        '</sheetView></sheetViews>'
+        f'<cols>{"".join(column_xml)}</cols>'
+        f'<sheetData>{"".join(row_xml)}</sheetData>'
+        '</worksheet>'
+    )
+
+
+def _styles_xml() -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<fonts count="2">'
+        '<font><sz val="11"/><name val="Calibri"/></font>'
+        '<font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font>'
+        '</fonts>'
+        '<fills count="3">'
+        '<fill><patternFill patternType="none"/></fill>'
+        '<fill><patternFill patternType="gray125"/></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill>'
+        '</fills>'
+        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        '<cellXfs count="2">'
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>'
+        '</cellXfs>'
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+        '</styleSheet>'
+    )
+
+
+def _write_xlsx(path: Path, sheets: list[tuple[str, list[str], list[list[object]]]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sheet_overrides = "".join(
+        f'<Override PartName="/xl/worksheets/sheet{index}.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        for index, _sheet in enumerate(sheets, start=1)
+    )
+    sheet_entries = "".join(
+        f'<sheet name="{_xml_text(title[:31])}" sheetId="{index}" r:id="rId{index}"/>'
+        for index, (title, _headers, _rows) in enumerate(sheets, start=1)
+    )
+    workbook_rels = "".join(
+        f'<Relationship Id="rId{index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{index}.xml"/>'
+        for index, _sheet in enumerate(sheets, start=1)
+    )
+    styles_rel_id = len(sheets) + 1
+
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+            '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+            '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+            f"{sheet_overrides}</Types>",
+        )
+        archive.writestr(
+            "_rels/.rels",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+            '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+            '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>'
+            "</Relationships>",
+        )
+        archive.writestr(
+            "xl/workbook.xml",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f"<sheets>{sheet_entries}</sheets></workbook>",
+        )
+        archive.writestr(
+            "xl/_rels/workbook.xml.rels",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f"{workbook_rels}"
+            f'<Relationship Id="rId{styles_rel_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+            "</Relationships>",
+        )
+        archive.writestr("xl/styles.xml", _styles_xml())
+        archive.writestr(
+            "docProps/core.xml",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>JobFiller Export</dc:title></cp:coreProperties>',
+        )
+        archive.writestr(
+            "docProps/app.xml",
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">'
+            '<Application>JobFiller</Application></Properties>',
+        )
+        for index, (_title, headers, rows) in enumerate(sheets, start=1):
+            archive.writestr(f"xl/worksheets/sheet{index}.xml", _sheet_xml(headers, rows))
 
 
 def export_current_workbook(db: Session, path: Path = WORKBOOK_PATH) -> Path:
     jobs = ordered_jobs(db)
-    workbook = Workbook()
-    workbook.remove(workbook.active)
 
     job_rows = []
     tailoring_rows = []
@@ -138,10 +265,10 @@ def export_current_workbook(db: Session, path: Path = WORKBOOK_PATH) -> Path:
             ]
         )
 
-    _add_sheet(
-        workbook,
-        "Jobs",
-        [
+    sheets = [
+        (
+            "Jobs",
+            [
             "Apply Order",
             "Company",
             "Title",
@@ -165,20 +292,19 @@ def export_current_workbook(db: Session, path: Path = WORKBOOK_PATH) -> Path:
             "Posted At",
             "Compile Status",
             "Local LLM Risks",
-        ],
-        job_rows,
-    )
-    _add_sheet(
-        workbook,
-        "Resume Tailoring",
-        ["Apply Order", "Company", "Title", "Role Family", "Target Requirements", "Target Keywords", "Compile Status", "Resume PDF Path"],
-        tailoring_rows,
-    )
-    _add_sheet(workbook, "Cover Letters", ["Apply Order", "Company", "Title", "Cover Letter Text", "Cover Letter Path"], cover_rows)
-    _add_sheet(workbook, "Tomorrow Checklist", ["Apply Order", "Company", "Title", "Action", "Files", "Manual Checks"], checklist_rows)
+            ],
+            job_rows,
+        ),
+        (
+            "Resume Tailoring",
+            ["Apply Order", "Company", "Title", "Role Family", "Target Requirements", "Target Keywords", "Compile Status", "Resume PDF Path"],
+            tailoring_rows,
+        ),
+        ("Cover Letters", ["Apply Order", "Company", "Title", "Cover Letter Text", "Cover Letter Path"], cover_rows),
+        ("Apply Queue", ["Apply Order", "Company", "Title", "Action", "Files", "Manual Checks"], checklist_rows),
+    ]
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(path)
+    _write_xlsx(path, sheets)
     return path
 
 

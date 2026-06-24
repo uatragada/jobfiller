@@ -73,7 +73,7 @@ const LOGO_PALETTE = [
 const DEFAULT_SETTINGS = {
   remoteFirst: true,
   preferredLocations: "Remote, hybrid, flexible location",
-  scannerKeywords: "entry level, associate, junior, new grad, remote, hybrid",
+  scannerKeywords: "software engineer, data analyst, product, operations, remote, hybrid",
   ollamaModel: "",
   ollamaUrl: "http://127.0.0.1:11434",
   candidateName: "",
@@ -683,7 +683,7 @@ function MobileNav({ jobs, openQuestions, facts, page, openPage }) {
   const items = [
     ["jobs", "Jobs", <Briefcase size={16} />, jobs.length],
     ["questions", "Questions", <HelpCircle size={16} />, openQuestions.length],
-    ["tomorrow", "Tomorrow", <CalendarCheck2 size={16} />, 0],
+    ["tomorrow", "Apply Queue", <CalendarCheck2 size={16} />, 0],
     ["facts", "Facts", <UserRound size={16} />, facts.length],
     ["runs", "Runs", <FileText size={16} />],
     ["reprocess", "Generate", <RefreshCcw size={16} />],
@@ -745,7 +745,7 @@ function Sidebar({ jobs, openQuestions, facts, openPage, page, settings }) {
           data-testid="nav-tomorrow"
           onClick={() => openPage("tomorrow")}
         >
-          <CalendarCheck2 size={18} /> Tomorrow Checklist
+          <CalendarCheck2 size={18} /> Apply Queue
         </button>
         <button
           className={page === "facts" ? "active" : ""}
@@ -918,7 +918,7 @@ function profileReady(settings) {
 
 function SetupPanel({ settings, modelHealth, openPage, onScan, busy }) {
   const ready = profileReady(settings);
-  const source = settings.scanSource && settings.scanSource !== "all" ? settings.scanSource : "Chrome tabs + sample/manual imports";
+  const source = settings.scanSource && settings.scanSource !== "all" ? settings.scanSource : "Browser job tabs + sample/manual imports";
   const llmState = modelHealth?.status || "checking";
   return (
     <section className="setupPanel" aria-label="JobFiller setup and scan status">
@@ -1632,7 +1632,7 @@ function TomorrowChecklistPage({ tomorrowChecklist, setNotice }) {
 
   return (
     <>
-      <PageHeader title="Tomorrow Checklist">
+      <PageHeader title="Apply Queue">
         <button className="blueButton" onClick={copyList} data-testid="tomorrow-copy-list"><CalendarCheck2 size={14} /> Copy Apply List</button>
         <span>{readyCount}/{rows.length} ready artifacts</span>
       </PageHeader>
@@ -1668,7 +1668,7 @@ function TomorrowChecklistPage({ tomorrowChecklist, setNotice }) {
             );
           })
         ) : (
-          <div className="noRows">No jobs ready for the tomorrow queue yet.</div>
+          <div className="noRows">No jobs ready for the apply queue yet.</div>
         )}
       </div>
     </>
@@ -1700,7 +1700,7 @@ function AgentImportPage({ modelHealth, setNotice }) {
         {
           url: "https://example.com/jobs/product-analyst",
           company: "Example Company",
-          title: "Entry Level Role",
+          title: "Example Role",
           location: "Remote",
           work_model: "Remote",
           key_requirements: "Requirements from the posting",
@@ -1948,7 +1948,7 @@ function SettingsPage({ settings, setSettings, setNotice, setError }) {
         <label>Scanner source
           <select data-testid="settings-scan-source" value={draft.scanSource || "all"} onChange={(e) => setDraft({ ...draft, scanSource: e.target.value })}>
             <option value="all">All</option>
-            <option value="chrome">Chrome tabs</option>
+            <option value="chrome">Browser job tabs</option>
             <option value="seed">Sample jobs</option>
           </select>
         </label>

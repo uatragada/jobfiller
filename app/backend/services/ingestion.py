@@ -5,6 +5,7 @@ import os
 import re
 import urllib.request
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -254,7 +255,104 @@ def chrome_debug_tabs() -> list[dict[str, object]]:
         return []
 
 
-def import_chrome_linkedin_jobs(
+JOB_HOST_HINTS = (
+    "linkedin.com/jobs",
+    "greenhouse.io",
+    "lever.co",
+    "ashbyhq.com",
+    "workdayjobs.com",
+    "myworkdayjobs.com",
+    "smartrecruiters.com",
+    "icims.com",
+    "bamboohr.com",
+    "jobvite.com",
+    "careers.",
+    "jobs.",
+)
+JOB_PATH_HINTS = (
+    "/jobs/",
+    "/job/",
+    "/careers/",
+    "/career/",
+    "/positions/",
+    "/position/",
+    "/openings/",
+    "/opening/",
+    "/requisitions/",
+)
+
+
+def _is_supported_job_tab(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    host_path = f"{parsed.netloc.lower()}{parsed.path.lower()}"
+    if any(hint in host_path for hint in JOB_HOST_HINTS):
+        return True
+    return any(hint in parsed.path.lower() for hint in JOB_PATH_HINTS)
+
+
+def _clean_title_piece(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip(" -|•:\t\r\n")
+
+
+NON_COMPANY_TITLE_PIECES = {
+    "ashby",
+    "careers",
+    "contract",
+    "full time",
+    "full-time",
+    "greenhouse",
+    "hybrid",
+    "job",
+    "jobs",
+    "lever",
+    "linkedin",
+    "on site",
+    "on-site",
+    "onsite",
+    "part time",
+    "part-time",
+    "remote",
+    "temporary",
+    "workday",
+}
+
+
+def _looks_like_non_company_piece(value: str) -> bool:
+    normalized = re.sub(r"\s+", " ", value.strip().lower())
+    if normalized in NON_COMPANY_TITLE_PIECES:
+        return True
+    if AGE_FROM_TITLE_RE.search(normalized):
+        return True
+    if re.fullmatch(r"(?:[a-z]{2}|[a-z]{2,}\s*,?\s*)?(?:remote|hybrid|onsite|on-site)", normalized):
+        return True
+    return False
+
+
+def _infer_title_company_from_tab(title_text: str, url: str) -> tuple[str, str]:
+    pieces = [_clean_title_piece(piece) for piece in re.split(r"\s[-|•]\s|\s+at\s+", title_text) if _clean_title_piece(piece)]
+    title = pieces[0] if pieces else ""
+    company_candidates = [piece for piece in pieces[1:] if not _looks_like_non_company_piece(piece)]
+    company = company_candidates[0] if company_candidates else ""
+
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    if not company and query.get("company"):
+        company = _clean_title_piece(str(query["company"][0]))
+    if not title:
+        path_tokens = [token for token in re.split(r"[/_-]+", parsed.path) if token and not token.isdigit()]
+        useful = [token for token in path_tokens if token.lower() not in {"jobs", "job", "careers", "career", "positions", "position", "view"}]
+        if useful:
+            title = " ".join(useful[-6:]).title()
+    if not company:
+        domain = parsed.netloc.lower().split(":")[0]
+        domain = domain.removeprefix("www.").removeprefix("jobs.").removeprefix("careers.")
+        company = domain.split(".")[0].replace("-", " ").title() if domain else "Unknown Company"
+    return title or "Imported Job", company or "Unknown Company"
+
+
+def import_chrome_job_tabs(
     db: Session,
     *,
     remote_first: bool = True,
@@ -263,23 +361,23 @@ def import_chrome_linkedin_jobs(
     jobs: list[Job] = []
     for tab in chrome_debug_tabs():
         url = str(tab.get("url") or "")
-        if "linkedin.com/jobs/" not in url or ("jobs/search" not in url and "jobs/view" not in url):
+        if not _is_supported_job_tab(url):
             continue
         title_text = str(tab.get("title") or "")
         if scanner_keywords and not _matches_any_keyword(f"{url} {title_text}", _keyword_tokens(scanner_keywords)):
             continue
-        title_parts = _title_tokens(title_text)
-        title = title_parts[0] if title_parts else "Imported Job"
-        location = _infer_location(" ".join(title_parts))
+        title, company = _infer_title_company_from_tab(title_text, url)
+        location = _infer_location(title_text)
         work_model = _infer_work_model(title, location)
         posting_age_text = _extract_posting_age_text(title_text)
-        if "jobs/search" in url and "remote" in title_text.lower():
+        if "remote" in f"{url} {title_text}".lower():
             work_model = "Remote"
         jobs.append(
             upsert_job(
                 db,
                 {
                     "url": url,
+                    "company": company,
                     "title": title,
                     "location": location,
                     "work_model": work_model,
@@ -312,7 +410,7 @@ def run_scan(
     limit: int | None = None,
     scanner_keywords: str | None = None,
 ) -> tuple[int, str]:
-    chrome_jobs = import_chrome_linkedin_jobs(
+    chrome_jobs = import_chrome_job_tabs(
         db,
         remote_first=remote_first,
         scanner_keywords=scanner_keywords,
@@ -331,7 +429,7 @@ def run_scan(
     ordering = "remote-first" if remote_first else "standard"
     message = (
         f"Imported/updated {imported} jobs newest-first ({ordering}). "
-        f"Chrome tabs: {len(chrome_jobs)}; seeded/current data: {len(seed_jobs)}."
+        f"Browser job tabs: {len(chrome_jobs)}; seeded/current data: {len(seed_jobs)}."
     )
     run.status = "SUCCEEDED"
     run.message = message

@@ -57,6 +57,7 @@ from .services.workbook import CSV_EXPORT_PATH, JSON_EXPORT_PATH, WORKBOOK_PATH,
 
 
 ROOT = Path(__file__).resolve().parents[2]
+FRONTEND_DIST = ROOT / "app" / "frontend" / "dist"
 TOKEN_PATH = OUTPUT_ROOT / ".jobfiller-token"
 API_CAPABILITIES = {
     "question_answer_autoflush_fix": True,
@@ -77,7 +78,11 @@ async def lifespan(_app: FastAPI):  # noqa: ANN201
 
 app = FastAPI(title="JobFiller", version=__version__, lifespan=lifespan)
 _configured_origins = [origin.strip() for origin in os.environ.get("JOBFILLER_ALLOWED_ORIGINS", "").split(",")]
-_default_origins = ["http://127.0.0.1:5173", "http://localhost:5173"]
+_default_origins = [
+    origin
+    for port in range(5173, 5194)
+    for origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+]
 _origin_allowlist = list(dict.fromkeys([*_default_origins, *[origin for origin in _configured_origins if origin]]))
 app.add_middleware(
     CORSMiddleware,
@@ -873,6 +878,11 @@ def tomorrow_checklist(db: Session = Depends(get_db)) -> list[dict[str, object]]
     return build_tomorrow_checklist(db)
 
 
+@app.get("/api/checklist/apply-queue")
+def apply_queue_checklist(db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    return build_tomorrow_checklist(db)
+
+
 @app.get("/api/export/latest.json")
 def download_latest_json() -> FileResponse:
     if not JSON_EXPORT_PATH.exists():
@@ -1064,3 +1074,22 @@ def assist_upload(job_id: int, kind: str = "resume", confirm: str = "", db: Sess
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
     return {"status": "started", "file_path": file_path}
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def serve_dashboard(full_path: str) -> FileResponse:
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="API route not found")
+    index_path = FRONTEND_DIST / "index.html"
+    if not index_path.exists():
+        raise HTTPException(status_code=404, detail="Dashboard build not found. Run npm run build in app/frontend or start the dev frontend.")
+    requested = (FRONTEND_DIST / full_path).resolve()
+    try:
+        requested.relative_to(FRONTEND_DIST.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Static file not found") from exc
+    if full_path and requested.exists() and requested.is_file():
+        return FileResponse(requested)
+    if full_path.startswith("assets/") or Path(full_path).suffix:
+        raise HTTPException(status_code=404, detail="Static file not found")
+    return FileResponse(index_path)

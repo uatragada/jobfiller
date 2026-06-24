@@ -18,9 +18,10 @@ On Windows, the PowerShell launcher is also supported:
 .\Start-JobFiller.ps1
 ```
 
-Both launchers create or reuse `.venv`, install Python and frontend
-dependencies when needed, start the FastAPI backend, and start the Vite
-dashboard.
+Both launchers create or reuse `.venv`, install Python dependencies when
+needed, start the FastAPI backend, and serve the built dashboard. Set
+`JOBFILLER_DEV_FRONTEND=true` or run `python start_jobfiller.py --dev-frontend`
+when developing the React/Vite dashboard.
 
 ## Validation
 
@@ -44,6 +45,7 @@ python -m pytest -q
 python scripts/doctor.py
 python scripts/smoke_mcp.py
 cd app\frontend
+npm ci
 npm test
 npm run build
 ```

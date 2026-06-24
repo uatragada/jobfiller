@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -85,6 +86,7 @@ def check_required_files() -> tuple[bool, str]:
         "requirements-dev.txt",
         "requirements-optional.txt",
         "app/frontend/package-lock.json",
+        "app/frontend/dist/index.html",
         "start_jobfiller.py",
         "Start-JobFiller.ps1",
         "scripts/smoke_mcp.py",
@@ -97,6 +99,24 @@ def check_required_files() -> tuple[bool, str]:
     if missing:
         return fail("Missing required files: " + ", ".join(missing))
     return ok("Required source/config files are present")
+
+
+def check_static_dashboard_assets() -> tuple[bool, str]:
+    index_path = ROOT / "app/frontend/dist/index.html"
+    if not index_path.exists():
+        return fail("Dashboard build is missing app/frontend/dist/index.html")
+    index_html = index_path.read_text(encoding="utf-8")
+    asset_paths = [
+        ROOT / "app/frontend/dist" / match.lstrip("/")
+        for match in re.findall(r"""(?:src|href)=["']([^"']+)["']""", index_html)
+        if match.startswith("/assets/") or match.startswith("assets/")
+    ]
+    if not asset_paths:
+        return fail("Dashboard build references no JS/CSS assets")
+    missing = [str(path.relative_to(ROOT)) for path in asset_paths if not path.exists()]
+    if missing:
+        return fail("Dashboard build references missing assets: " + ", ".join(missing))
+    return ok("Dashboard build assets are present")
 
 
 def check_json_files() -> tuple[bool, str]:
@@ -132,6 +152,7 @@ def main() -> int:
         check_node,
         check_npm_or_pnpm,
         check_required_files,
+        check_static_dashboard_assets,
         check_json_files,
         check_gitignore_privacy,
         check_ollama_hint,

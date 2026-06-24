@@ -31,6 +31,18 @@ python scripts/smoke_mcp.py
 
 The smoke test launches the server the same way Claude Code's project config does, calls `initialize`, lists tools, and validates a sample public job record without contacting the JobFiller API.
 
+To verify a live import against a running JobFiller API, start the app and run:
+
+```powershell
+python scripts/smoke_mcp.py --live-export --api-base http://127.0.0.1:8001/api
+```
+
+The cross-platform startup smoke also runs this live export when called as:
+
+```powershell
+python start_jobfiller.py --smoke --mcp-export-smoke
+```
+
 ## Codex
 
 This repo includes `.codex/config.toml` with a project-scoped `jobfiller` MCP server:
@@ -95,5 +107,7 @@ Use `export_jobs_to_jobfiller` with this shape:
 ```
 
 Row-level import errors are returned by JobFiller and are not hidden by the MCP bridge. Set `process` to `true` only when you want the app to immediately run missing-information checks and generate artifacts for the batch.
+
+`materials`, `manual_questions`, and `raw_text` are text fields. The MCP bridge does not upload arbitrary files or externally generated PDFs; JobFiller creates and manages local resume and cover-letter artifacts after the job record is imported.
 
 For copy-pasteable Codex and Claude Code scanning prompts, see [agent-workflows.md](agent-workflows.md).

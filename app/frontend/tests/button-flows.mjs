@@ -393,7 +393,7 @@ async function handleApi(route) {
     return route.fulfill(json({ ...run, logs: ["mock run detail"], duration_ms: 25 }));
   }
 
-  if (path === "/api/checklist/tomorrow" && method === "GET") {
+  if ((path === "/api/checklist/apply-queue" || path === "/api/checklist/tomorrow") && method === "GET") {
     return route.fulfill(json(jobs.slice(0, 4).map((job, index) => ({
       job_id: job.id,
       apply_order: index + 1,
@@ -644,7 +644,7 @@ async function main() {
     for (const [testId, text] of [
       ["nav-jobs", "Ramp"],
       ["nav-questions", "Questions"],
-      ["nav-tomorrow", "Tomorrow Checklist"],
+      ["nav-tomorrow", "Apply Queue"],
       ["nav-facts", "Profile Facts"],
       ["nav-runs", "Runs & Logs"],
       ["nav-reprocess", "Generate Queue"],

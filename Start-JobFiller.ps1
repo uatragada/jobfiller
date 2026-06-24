@@ -37,7 +37,28 @@ $FrontendPort = 5173
 if ($env:JOBFILLER_FRONTEND_PORT) {
     $FrontendPort = [int]$env:JOBFILLER_FRONTEND_PORT
 }
+$FrontendPortStart = $FrontendPort
+$FrontendPortMaxScan = $FrontendPort + 20
+if ($env:JOBFILLER_FRONTEND_PORT_MAX) {
+    $FrontendPortMaxScan = [int]$env:JOBFILLER_FRONTEND_PORT_MAX
+}
+if ($FrontendPortMaxScan -lt $FrontendPort) {
+    $FrontendPortMaxScan = $FrontendPort
+}
+$configuredAllowedOrigins = @()
+if ($env:JOBFILLER_ALLOWED_ORIGINS) {
+    $configuredAllowedOrigins = $env:JOBFILLER_ALLOWED_ORIGINS -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+}
+$frontendOriginAllowlist = @()
+for ($originPort = $FrontendPortStart; $originPort -le $FrontendPortMaxScan; $originPort++) {
+    $frontendOriginAllowlist += "http://127.0.0.1:$originPort"
+    $frontendOriginAllowlist += "http://localhost:$originPort"
+}
+$FrontendAllowedOrigins = (@($frontendOriginAllowlist + $configuredAllowedOrigins) | Select-Object -Unique) -join ","
 $FrontendDir = Join-Path $Root "app\frontend"
+$FrontendDistIndex = Join-Path $FrontendDir "dist\index.html"
+$UseDevFrontend = ([string]$env:JOBFILLER_DEV_FRONTEND) -match "^(1|true|yes)$"
+$UseStaticDashboard = (Test-Path $FrontendDistIndex) -and (-not $UseDevFrontend)
 $OutputsDir = Join-Path $Root "outputs"
 $LogsDir = Join-Path $Root "artifacts"
 $BackendLog = Join-Path $LogsDir "jobfiller-backend-current.log"
@@ -412,6 +433,80 @@ function Test-FrontendReady {
     return $false
 }
 
+function Get-DashboardAssetPaths {
+    param([string]$Html)
+    $matches = [regex]::Matches($Html, '(?:src|href)=["'']([^"'']+)["'']')
+    $paths = @()
+    foreach ($match in $matches) {
+        $path = [string]$match.Groups[1].Value
+        if ($path.StartsWith("/assets/") -or $path.StartsWith("assets/")) {
+            if (-not $path.StartsWith("/")) {
+                $path = "/$path"
+            }
+            $paths += $path
+        }
+    }
+    return $paths | Select-Object -Unique
+}
+
+function Test-StaticDashboardReady {
+    param([int]$BackendPort, [string]$HostName = $BackendHost, [int]$MaxRetries = 20, [int]$DelayMs = 500)
+    $dashboardUrl = "http://$HostName`:$BackendPort"
+    $jobsUrl = "http://$HostName`:$BackendPort/api/jobs?sort=newest&remote_first=true"
+    $sessionUrl = "http://$HostName`:$BackendPort/api/session"
+
+    for ($i = 0; $i -lt $MaxRetries; $i++) {
+        try {
+            $dashboard = Invoke-WebRequest -Uri $dashboardUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            $dashboardContentType = [string]$dashboard.Headers["Content-Type"]
+            if ($dashboard.StatusCode -ne 200 -or $dashboardContentType.ToLowerInvariant() -notlike "*text/html*") {
+                Start-Sleep -Milliseconds $DelayMs
+                continue
+            }
+
+            $assetPaths = @(Get-DashboardAssetPaths -Html ([string]$dashboard.Content))
+            if (-not $assetPaths) {
+                Start-Sleep -Milliseconds $DelayMs
+                continue
+            }
+
+            $assetsOk = $true
+            foreach ($assetPath in $assetPaths) {
+                $asset = Invoke-WebRequest -Uri "$dashboardUrl$assetPath" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+                $assetContentType = ([string]$asset.Headers["Content-Type"]).ToLowerInvariant()
+                $assetPreview = ([string]$asset.Content).TrimStart().ToLowerInvariant()
+                if ($assetPath.EndsWith(".js") -and $assetContentType -notlike "*javascript*") {
+                    $assetsOk = $false
+                    break
+                }
+                if ($assetPath.EndsWith(".css") -and $assetContentType -notlike "*text/css*") {
+                    $assetsOk = $false
+                    break
+                }
+                if ($assetPreview.StartsWith("<!doctype") -or $assetPreview.StartsWith("<html")) {
+                    $assetsOk = $false
+                    break
+                }
+            }
+            if (-not $assetsOk) {
+                Start-Sleep -Milliseconds $DelayMs
+                continue
+            }
+
+            $session = Invoke-RestMethod -Uri $sessionUrl -TimeoutSec 2 -ErrorAction Stop
+            $protectedHeaders = @{ "X-JobFiller-Token" = [string]$session.mutation_token }
+            $jobs = Invoke-RestMethod -Uri $jobsUrl -Headers $protectedHeaders -TimeoutSec 2 -ErrorAction Stop
+            if ($null -ne $jobs -and $jobs -is [System.Array]) {
+                Write-Output "Static dashboard is ready: $dashboardUrl"
+                return $true
+            }
+        } catch {
+            Start-Sleep -Milliseconds $DelayMs
+        }
+    }
+    return $false
+}
+
 function Ensure-FrontendPortFree {
     param([int]$Port)
     $listeners = Get-ActivePortListenersByPort -Port $Port
@@ -456,9 +551,9 @@ function Start-JobFillerFrontend {
 
         $pmName = Get-PackageManagerName -Executable $PackageManager
         if ($pmName -eq "pnpm") {
-            $frontendArgs = @("dev", "--host", "127.0.0.1", "--port", "$FrontendPort")
+            $frontendArgs = @("dev", "--host", "127.0.0.1", "--port", "$FrontendPort", "--strictPort")
         } else {
-            $frontendArgs = @("run", "dev", "--", "--host", "127.0.0.1", "--port", "$FrontendPort")
+            $frontendArgs = @("run", "dev", "--", "--host", "127.0.0.1", "--port", "$FrontendPort", "--strictPort")
         }
 
         $oldApiBase = if (Test-Path Env:VITE_API_BASE) { $env:VITE_API_BASE } else { $null }
@@ -498,7 +593,7 @@ function Start-JobFillerFrontend {
 }
 
 function Write-RuntimeConfig {
-    param([string]$BackendApiBase)
+    param([string]$BackendApiBase, [string]$FrontendUrl)
     $runtimePath = Join-Path $OutputsDir "jobfiller-runtime.json"
     $mutationToken = ""
     try {
@@ -509,7 +604,7 @@ function Write-RuntimeConfig {
     }
     $payload = [PSCustomObject]@{
         api_base = $BackendApiBase
-        frontend_url = "http://127.0.0.1:$FrontendPort"
+        frontend_url = $FrontendUrl
         mutation_token = $mutationToken
         updated_at = (Get-Date).ToUniversalTime().ToString("o")
     }
@@ -519,15 +614,22 @@ function Write-RuntimeConfig {
 
 try {
     Start-Transcript -Path $StartupLog -Append -Force | Out-Null
+    $oldAllowedOrigins = if (Test-Path Env:JOBFILLER_ALLOWED_ORIGINS) { $env:JOBFILLER_ALLOWED_ORIGINS } else { $null }
+    if (-not $UseStaticDashboard) {
+        $env:JOBFILLER_ALLOWED_ORIGINS = $FrontendAllowedOrigins
+    }
 
     $python = Resolve-Executable -Candidates $PythonCandidates -Label "Python"
     $python = Ensure-PythonEnvironment -BootstrapPython $python
-    $packageManager = Resolve-Executable -Candidates @(
-        $NpmCandidate,
-        $PnpmCandidate,
-        "npm",
-        "pnpm"
-    ) -Label "Node package manager (npm or pnpm)"
+    $packageManager = $null
+    if (-not $UseStaticDashboard) {
+        $packageManager = Resolve-Executable -Candidates @(
+            $NpmCandidate,
+            $PnpmCandidate,
+            "npm",
+            "pnpm"
+        ) -Label "Node package manager (npm or pnpm)"
+    }
 
     if (-not $ReuseExistingBackend) {
         Stop-VisibleJobFillerBackends -StartPort $BackendPortStart -MaxPort $BackendPortMaxScan
@@ -591,30 +693,60 @@ try {
 
     $backendMessage = if ($backendWasReused) { "reused" } else { "started" }
     Write-Output "Backend is available on ${backendApiBase} (${backendMessage})."
-    Write-RuntimeConfig -BackendApiBase $backendApiBase
+    $dashboardUrl = if ($UseStaticDashboard) { "http://$BackendHost`:$BackendPort" } else { "http://127.0.0.1:$FrontendPort" }
+
+    if ($UseStaticDashboard) {
+        if (-not (Test-StaticDashboardReady -BackendPort $BackendPort -HostName $BackendHost)) {
+            throw "Static dashboard failed readiness checks. Rebuild with npm run build in app/frontend or use JOBFILLER_DEV_FRONTEND=true."
+        }
+        Write-RuntimeConfig -BackendApiBase $backendApiBase -FrontendUrl $dashboardUrl
+        Write-Output "Using built dashboard from $(Split-Path -Parent $FrontendDistIndex)."
+        Write-Output "Dashboard: $dashboardUrl"
+        Write-Output "Backend API base: $backendApiBase"
+        Write-Output "Backend logs: $BackendLog"
+        $elapsedSeconds = [math]::Round(((Get-Date) - $ScriptStartedAt).TotalSeconds, 1)
+        Write-Output "Startup completed in ${elapsedSeconds}s."
+        return
+    }
+
+    Write-RuntimeConfig -BackendApiBase $backendApiBase -FrontendUrl $dashboardUrl
 
     $frontendStarted = $false
     for ($frontendAttempt = 1; $frontendAttempt -le $FrontendScanAttempts; $frontendAttempt++) {
-        try {
-            Start-JobFillerFrontend -PackageManager $packageManager -BackendApiBase $backendApiBase
-            $frontendStarted = $true
-            break
-        } catch {
-            Write-Output "Frontend start attempt ${frontendAttempt} failed: $($_.Exception.Message)"
-            if ($frontendAttempt -lt $FrontendScanAttempts) {
-                Write-Output "Retrying frontend startup..."
-                Stop-ProcessesByPort -Port $FrontendPort
-                Start-Sleep -Milliseconds 500
+        foreach ($candidateFrontendPort in $FrontendPortStart..$FrontendPortMaxScan) {
+            $FrontendPort = $candidateFrontendPort
+            try {
+                Start-JobFillerFrontend -PackageManager $packageManager -BackendApiBase $backendApiBase
+                $frontendStarted = $true
+                break
+            } catch {
+                Write-Output "Frontend start attempt ${frontendAttempt} on port ${candidateFrontendPort} failed: $($_.Exception.Message)"
+                Stop-ProcessesByPort -Port $candidateFrontendPort
+                Start-Sleep -Milliseconds 300
             }
+        }
+        if ($frontendStarted) {
+            break
+        }
+        if ($frontendAttempt -lt $FrontendScanAttempts) {
+            Write-Output "Retrying frontend startup..."
+            Start-Sleep -Milliseconds 500
         }
     }
 
     if (-not $frontendStarted) {
-        throw "Failed to start frontend after $FrontendScanAttempts attempts."
+        throw "Failed to start frontend after $FrontendScanAttempts attempts across ports ${FrontendPortStart}-${FrontendPortMaxScan}."
     }
 
     $elapsedSeconds = [math]::Round(((Get-Date) - $ScriptStartedAt).TotalSeconds, 1)
     Write-Output "Startup completed in ${elapsedSeconds}s."
 } finally {
+    if (Test-Path Variable:oldAllowedOrigins) {
+        if ($null -eq $oldAllowedOrigins) {
+            Remove-Item Env:JOBFILLER_ALLOWED_ORIGINS -ErrorAction SilentlyContinue
+        } else {
+            $env:JOBFILLER_ALLOWED_ORIGINS = $oldAllowedOrigins
+        }
+    }
     Stop-Transcript | Out-Null
 }

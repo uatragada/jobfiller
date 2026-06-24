@@ -154,7 +154,7 @@ async function handleApi(route) {
       job_status_counts: { QA: 1 },
     }));
   }
-  if (path === "/api/checklist/tomorrow" && method === "GET") return route.fulfill(json([]));
+  if ((path === "/api/checklist/apply-queue" || path === "/api/checklist/tomorrow") && method === "GET") return route.fulfill(json([]));
   if (path === "/api/jobs/1" && method === "GET") return route.fulfill(json(jobDetail()));
   if (path === "/api/export/workbook" && method === "POST") {
     return route.fulfill(json({

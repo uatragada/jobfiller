@@ -37,7 +37,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "default_location": "Remote",
         "default_work_model": "Remote",
         "preferred_locations": "Remote, hybrid, candidate-selected regions",
-        "default_keywords": "entry level, associate, junior, new grad, remote, hybrid",
+        "default_keywords": "software engineer, data analyst, product, operations, remote, hybrid",
         "default_limit": 20,
         "seed_data_path": str(ROOT / "examples" / "jobs.sample.json"),
     },

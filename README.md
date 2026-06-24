@@ -25,13 +25,13 @@ For macOS, Linux, or a Python-only startup path on Windows:
 python start_jobfiller.py
 ```
 
-Both startup scripts create `.venv` when needed, install runtime Python dependencies from `requirements.txt`, install frontend dependencies, start the backend, and start the Vite dashboard.
+Both startup scripts create `.venv` when needed, install runtime Python dependencies from `requirements.txt`, start the backend, and serve the built dashboard from FastAPI. Frontend dependencies are only needed for development or rebuilding `app/frontend/dist`.
 
-The first cold run may take longer while Python and Node packages install. After dependencies are installed, startup should normally be a single warm-start command.
+The first cold run may take longer while Python packages install. After dependencies are installed, startup should normally be a single warm-start command.
 By default the PowerShell script restarts JobFiller's backend so code changes are picked up. Set `JOBFILLER_REUSE_BACKEND=true` before running the PowerShell script only when you intentionally want to reuse an already-running backend. The Python runner is non-destructive and chooses free ports when defaults are busy.
-For release checks or quick local confidence without leaving servers running, use `python start_jobfiller.py --smoke`. Add `--mcp-export-smoke` to verify the MCP export path against the temporary smoke backend.
+Set `JOBFILLER_DEV_FRONTEND=true` or run `python start_jobfiller.py --dev-frontend` when you want the Vite development dashboard instead of the built dashboard. For release checks or quick local confidence without leaving servers running, use `python start_jobfiller.py --smoke`. Add `--mcp-export-smoke` to verify the MCP export path against the temporary smoke backend.
 
-- Dashboard: `http://127.0.0.1:5173`
+- Dashboard: printed by the startup script, usually `http://127.0.0.1:8001` with the built dashboard or `http://127.0.0.1:5173` in dev-frontend mode
 - Backend API: printed by the startup script, usually `http://127.0.0.1:8001/api`
 - Logs and generated artifacts: `artifacts/`
 - Local settings and database: `outputs/`
@@ -78,8 +78,8 @@ The expected result is a passing backend suite, passing frontend browser-flow te
 
 - If the dashboard says it cannot fetch data, restart with `.\Start-JobFiller.ps1` or `python start_jobfiller.py` and check the backend URL printed by the script. Do not set `JOBFILLER_REUSE_BACKEND=true` while debugging stale backend behavior.
 - Backend logs are written to `artifacts/jobfiller-backend-current.log` and `artifacts/jobfiller-backend-current.err.log`.
-- Frontend logs are written to `artifacts/jobfiller-frontend-current.log` and `artifacts/jobfiller-frontend-current.err.log`.
-- If port `5173` is busy, stop the existing Vite process and rerun the start script.
+- Frontend logs are written only in dev-frontend mode to `artifacts/jobfiller-frontend-current.log` and `artifacts/jobfiller-frontend-current.err.log`.
+- If port `5173` is busy in dev-frontend mode, stop the existing Vite process and rerun the start script.
 - If backend ports `8001-8005` are busy, stop the conflicting local services or widen the scan with `JOBFILLER_BACKEND_PORT_MAX`.
 - If frontend ports `5173-5193` are busy when using the Python runner, widen the scan with `JOBFILLER_FRONTEND_PORT_MAX`.
 - Set `JOBFILLER_PYTHON`, `JOBFILLER_NPM`, or `JOBFILLER_PNPM` to known executable paths if auto-detection picks the wrong runtime.

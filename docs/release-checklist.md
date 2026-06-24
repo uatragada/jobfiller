@@ -11,10 +11,10 @@ JobFiller from a fresh clone.
 - `python scripts/doctor.py` passes.
 - `python scripts/smoke_mcp.py` launches the stdio MCP server and verifies Codex/Claude export tools.
 - `npm ci`, `npm test`, and `npm run build` pass in `app/frontend`.
-- `python start_jobfiller.py --smoke --mcp-export-smoke` starts backend/frontend, verifies readiness, verifies a live MCP export into a temporary smoke database, finishes within the warm-start budget, and cleans up child processes.
+- `python start_jobfiller.py --smoke --mcp-export-smoke` starts the backend, serves the built dashboard, verifies readiness, verifies a live MCP export into a temporary smoke database, finishes within the warm-start budget, and cleans up child processes.
 - `.\Start-JobFiller.ps1` starts the backend and dashboard and logs elapsed startup time on Windows.
 - `python start_jobfiller.py` starts the backend and dashboard on a free local port.
-- Dashboard loads at `http://127.0.0.1:5173`.
+- Dashboard loads at the URL printed by the startup script, usually `http://127.0.0.1:8001` for the built dashboard or `http://127.0.0.1:5173` in dev-frontend mode.
 - Protected API routes reject missing `X-JobFiller-Token`.
 - MCP status works after startup because `outputs/jobfiller-runtime.json` exists locally.
 - Codex and Claude Code project MCP configs point to `integrations/mcp/jobfiller_mcp_server.py`.

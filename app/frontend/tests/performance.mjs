@@ -104,7 +104,7 @@ async function handleApi(route) {
   if (path === "/api/questions" && method === "GET") return route.fulfill(json([]));
   if (path === "/api/profile-facts" && method === "GET") return route.fulfill(json([]));
   if (path === "/api/runs" && method === "GET") return route.fulfill(json([]));
-  if (path === "/api/checklist/tomorrow" && method === "GET") return route.fulfill(json([]));
+  if ((path === "/api/checklist/apply-queue" || path === "/api/checklist/tomorrow") && method === "GET") return route.fulfill(json([]));
   if (path === "/api/model-health" && method === "GET") {
     return route.fulfill(json({
       model: "example-local-model:latest",

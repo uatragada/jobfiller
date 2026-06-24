@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import zipfile
+import xml.etree.ElementTree as ET
 
 import pytest
 from fastapi.testclient import TestClient
@@ -110,6 +112,27 @@ def test_local_mutations_require_local_token() -> None:
     )
     assert allowed.status_code == 200
     assert allowed.json()["company"] == "TokenCo"
+
+
+def test_local_cors_allows_launcher_frontend_port_range() -> None:
+    response = client.options(
+        "/api/questions/1/answer",
+        headers={
+            "Origin": "http://127.0.0.1:5193",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-jobfiller-token",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5193"
+
+
+def test_missing_static_asset_returns_404_not_dashboard_html() -> None:
+    response = client.get("/assets/definitely-missing-jobfiller-test.js")
+
+    assert response.status_code == 404
+    assert "text/html" not in response.headers.get("content-type", "").lower()
 
 
 def test_settings_reject_remote_ollama_url_without_opt_in() -> None:
@@ -356,6 +379,14 @@ def test_model_health_and_export_aliases_contract() -> None:
     export = client.post("/api/export/workbook")
     assert export.status_code == 200
     assert export.json()["formats"]["xlsx"].endswith(".xlsx")
+    workbook_path = export.json()["formats"]["xlsx"]
+    assert zipfile.is_zipfile(workbook_path)
+    with zipfile.ZipFile(workbook_path) as archive:
+        names = set(archive.namelist())
+        assert {"xl/workbook.xml", "xl/worksheets/sheet1.xml", "xl/styles.xml"} <= names
+        for name in names:
+            if name.endswith(".xml"):
+                ET.fromstring(archive.read(name))
 
     json_export = client.get("/api/export/latest.json")
     csv_export = client.get("/api/export/latest.csv")
@@ -745,7 +776,7 @@ def test_tomorrow_checklist_contract_and_sorting() -> None:
     )
     assert all(item.status_code == 200 for item in (fresh, older, unknown))
 
-    checklist = client.get("/api/checklist/tomorrow").json()
+    checklist = client.get("/api/checklist/apply-queue").json()
 
     assert isinstance(checklist, list)
     assert len(checklist) >= 3

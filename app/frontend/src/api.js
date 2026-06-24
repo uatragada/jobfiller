@@ -176,13 +176,36 @@ async function sessionToken() {
 }
 
 async function request(path, options = {}) {
-  const url = apiRequestUrl(await resolveApiBase(), path);
   const method = options.method || "GET";
-  const tokenHeaders = requestNeedsToken(path) || isMutatingMethod(method) ? { "X-JobFiller-Token": await sessionToken() } : {};
-  const response = await fetch(url, {
-    headers: { "Content-Type": "application/json", ...tokenHeaders, ...(options.headers || {}) },
-    ...options,
-  });
+  const needsToken = requestNeedsToken(path) || isMutatingMethod(method);
+  let response = null;
+  let url = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const base = await resolveApiBase();
+    url = apiRequestUrl(base, path);
+    const tokenHeaders = needsToken ? { "X-JobFiller-Token": await sessionToken() } : {};
+    try {
+      response = await fetch(url, {
+        headers: { "Content-Type": "application/json", ...tokenHeaders, ...(options.headers || {}) },
+        ...options,
+      });
+    } catch (error) {
+      if (attempt === 0) {
+        resolvedApiBase = null;
+        mutationToken = "";
+        continue;
+      }
+      throw error;
+    }
+    if (response.status === 403 && needsToken && attempt === 0) {
+      mutationToken = "";
+      continue;
+    }
+    break;
+  }
+  if (!response) {
+    throw new Error(`Unable to reach the JobFiller backend API for ${path}.`);
+  }
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(detail || response.statusText);
@@ -240,7 +263,7 @@ export const api = {
   openArtifactFolder: (id) => request(`/api/artifacts/${id}/open-folder`, { method: "POST" }),
   openArtifactFolderAlias: (id) => request(`/api/artifacts/${id}/open`),
   artifactDownload: (id, kind = "resume") => request(`/api/artifacts/${id}/download?kind=${encodeURIComponent(kind)}`),
-  tomorrowChecklist: () => request("/api/checklist/tomorrow"),
+  tomorrowChecklist: () => request("/api/checklist/apply-queue"),
   assistUpload: (id, kind = "resume") =>
     request(`/api/jobs/${id}/assist-upload?kind=${kind}&confirm=review-before-submit`, { method: "POST" }),
 };
