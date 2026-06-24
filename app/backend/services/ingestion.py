@@ -128,7 +128,7 @@ def estimate_fit(title: str, requirements: str, keywords: str) -> int:
     text = " ".join([title, requirements, keywords]).lower()
     score = 70
     configured_terms = _keyword_tokens(_default_keywords())
-    for term in configured_terms or ("entry level", "associate", "junior", "new grad"):
+    for term in configured_terms:
         if term in text:
             score += 4
     for term in ("senior", "staff", "principal", "10+"):

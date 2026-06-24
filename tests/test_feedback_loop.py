@@ -27,6 +27,50 @@ def make_non_autoflush_db():
     return sessionmaker(bind=engine, autoflush=False, future=True)()
 
 
+def test_fit_score_does_not_default_to_entry_level_bias(monkeypatch) -> None:
+    monkeypatch.setattr("app.backend.services.ingestion._default_keywords", lambda: "")
+
+    generic = upsert_job(
+        make_db(),
+        {
+            "url": "https://www.linkedin.com/jobs/view/generic-fit-score",
+            "company": "GenericCo",
+            "title": "Software Developer",
+            "key_requirements": "Python; APIs; testing",
+            "keywords": "",
+        },
+    )
+    entry_level = upsert_job(
+        make_db(),
+        {
+            "url": "https://www.linkedin.com/jobs/view/entry-level-fit-score",
+            "company": "GenericCo",
+            "title": "Entry Level Software Developer",
+            "key_requirements": "Python; APIs; testing",
+            "keywords": "",
+        },
+    )
+
+    assert generic.fit_score == entry_level.fit_score
+
+
+def test_fit_score_uses_configured_keywords(monkeypatch) -> None:
+    monkeypatch.setattr("app.backend.services.ingestion._default_keywords", lambda: "backend, api")
+
+    job = upsert_job(
+        make_db(),
+        {
+            "url": "https://www.linkedin.com/jobs/view/configured-fit-score",
+            "company": "GenericCo",
+            "title": "Backend Engineer",
+            "key_requirements": "APIs; testing",
+            "keywords": "",
+        },
+    )
+
+    assert job.fit_score > 70
+
+
 def test_missing_info_blocks_without_inventing_claims() -> None:
     db = make_db()
     job = upsert_job(
