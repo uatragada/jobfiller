@@ -46,6 +46,7 @@ Run these before publishing:
 ```powershell
 python -m pytest -q
 python -m py_compile start_jobfiller.py
+python scripts/doctor.py
 cd app\frontend
 npm ci
 npm test

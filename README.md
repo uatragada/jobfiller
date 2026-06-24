@@ -53,6 +53,7 @@ Run the backend and frontend checks before sharing a branch or release:
 ```powershell
 python -m pytest -q
 python -m py_compile start_jobfiller.py
+python scripts/doctor.py
 cd app\frontend
 npm ci
 npm test
@@ -60,6 +61,7 @@ npm run build
 ```
 
 The expected result is a passing backend suite, passing frontend browser-flow tests, and a successful Vite production build.
+`python scripts/doctor.py` performs a fast clone-readiness check for Python, Node, package manager, config files, and privacy-sensitive ignore rules.
 
 ## Troubleshooting
 
@@ -108,10 +110,12 @@ JobFiller includes a local stdio MCP server so Codex, Claude Code, and other MCP
 - Codex project config: `.codex/config.toml`
 - Claude Code project config: `.mcp.json`
 - Setup and tool details: [docs/mcp-integration.md](docs/mcp-integration.md)
+- Practical agent prompts: [docs/agent-workflows.md](docs/agent-workflows.md)
 
 The MCP tools call the same validated bulk-import API and do not submit applications.
 
 Sample seed data lives in [examples/jobs.sample.json](examples/jobs.sample.json).
+Sample MCP export data lives in [examples/mcp-export.sample.json](examples/mcp-export.sample.json).
 
 ## Publishing
 

@@ -1,0 +1,23 @@
+{
+  "source": "agent-example",
+  "process": false,
+  "jobs": [
+    {
+      "url": "https://example.com/jobs/product-platform-engineer",
+      "company": "Example Systems",
+      "title": "Product Platform Engineer",
+      "location": "Remote",
+      "work_model": "Remote",
+      "apply_url": "https://example.com/jobs/product-platform-engineer/apply",
+      "role_family": "Software Engineering",
+      "key_requirements": "APIs; data workflows; frontend collaboration; testing",
+      "keywords": "API design; data validation; product engineering; automated testing",
+      "fit_score": 84,
+      "posting_age_text": "3 hours ago",
+      "salary": "Not listed",
+      "materials": "Resume; optional cover letter",
+      "manual_questions": "Work authorization; preferred start date",
+      "notes": "Example MCP payload for Codex or Claude Code imports."
+    }
+  ]
+}

@@ -83,3 +83,5 @@ Use `export_jobs_to_jobfiller` with this shape:
 ```
 
 Row-level import errors are returned by JobFiller and are not hidden by the MCP bridge. Set `process` to `true` only when you want the app to immediately run missing-information checks and generate artifacts for the batch.
+
+For copy-pasteable Codex and Claude Code scanning prompts, see [agent-workflows.md](agent-workflows.md).

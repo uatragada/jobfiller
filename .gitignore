@@ -22,6 +22,7 @@ outputs/
 artifacts/
 .env
 .env.*
+!.env.example
 *.local
 *.db
 *.sqlite
