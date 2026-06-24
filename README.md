@@ -104,3 +104,22 @@ JobFiller includes a local stdio MCP server so Codex, Claude Code, and other MCP
 The MCP tools call the same validated bulk-import API and do not submit applications.
 
 Sample seed data lives in [examples/jobs.sample.json](examples/jobs.sample.json).
+
+## Publishing
+
+This checkout includes GitHub Actions CI and a publish helper for turning a local
+repo into a GitHub repository after `gh auth login`:
+
+```powershell
+.\scripts\Publish-JobFiller.ps1 -RepositoryName jobfiller -Visibility public
+```
+
+See [docs/publishing.md](docs/publishing.md) and [docs/release-checklist.md](docs/release-checklist.md).
+
+## Privacy And License
+
+JobFiller stores local candidate data, generated resumes, generated cover letters,
+runtime tokens, logs, and workbooks under ignored directories such as `outputs/`
+and `artifacts/`. Review generated files before sharing them.
+
+JobFiller is distributed under the MIT license; see [LICENSE](LICENSE).
