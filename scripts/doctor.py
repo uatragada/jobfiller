@@ -82,6 +82,7 @@ def check_npm_or_pnpm() -> tuple[bool, str]:
 def check_required_files() -> tuple[bool, str]:
     required = [
         "requirements.txt",
+        "requirements-dev.txt",
         "app/frontend/package-lock.json",
         "start_jobfiller.py",
         "Start-JobFiller.ps1",

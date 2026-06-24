@@ -39,6 +39,7 @@ python start_jobfiller.py --smoke
 For individual checks:
 
 ```powershell
+python -m pip install -r requirements-dev.txt
 python -m pytest -q
 python scripts/doctor.py
 cd app\frontend

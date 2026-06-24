@@ -25,7 +25,7 @@ For macOS, Linux, or a Python-only startup path on Windows:
 python start_jobfiller.py
 ```
 
-Both startup scripts create `.venv` when needed, install Python dependencies from `requirements.txt`, install frontend dependencies, start the backend, and start the Vite dashboard.
+Both startup scripts create `.venv` when needed, install runtime Python dependencies from `requirements.txt`, install frontend dependencies, start the backend, and start the Vite dashboard.
 
 The first cold run may take longer while Python and Node packages install. After dependencies are installed, startup should normally be a single warm-start command.
 By default the PowerShell script restarts JobFiller's backend so code changes are picked up. Set `JOBFILLER_REUSE_BACKEND=true` before running the PowerShell script only when you intentionally want to reuse an already-running backend. The Python runner is non-destructive and chooses free ports when defaults are busy.
@@ -58,6 +58,7 @@ python scripts/verify_release.py
 Or run the underlying checks individually:
 
 ```powershell
+python -m pip install -r requirements-dev.txt
 python -m pytest -q
 python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py
 python scripts/doctor.py

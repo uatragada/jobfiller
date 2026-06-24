@@ -12,6 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "app" / "frontend"
 
 
+def venv_python_path() -> Path:
+    if sys.platform.startswith("win"):
+        return ROOT / ".venv" / "Scripts" / "python.exe"
+    return ROOT / ".venv" / "bin" / "python"
+
+
 def run_step(label: str, command: list[str], *, cwd: Path = ROOT) -> bool:
     started = time.perf_counter()
     print(f"\n==> {label}", flush=True)
@@ -23,6 +29,27 @@ def run_step(label: str, command: list[str], *, cwd: Path = ROOT) -> bool:
         return False
     print(f"OK   {label} passed in {elapsed:.1f}s", flush=True)
     return True
+
+
+def ensure_release_python() -> str:
+    python = venv_python_path()
+    if not python.exists():
+        if not run_step("Python virtual environment", [sys.executable, "-m", "venv", str(ROOT / ".venv")]):
+            raise SystemExit(1)
+    probe = subprocess.run(
+        [str(python), "-c", "import fastapi, sqlalchemy, uvicorn, pydantic, pytest, httpx2"],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if probe.returncode:
+        if not run_step(
+            "Python release dependencies",
+            [str(python), "-m", "pip", "install", "-r", str(ROOT / "requirements-dev.txt")],
+        ):
+            raise SystemExit(1)
+    return str(python)
 
 
 def main() -> int:
@@ -38,15 +65,12 @@ def main() -> int:
     if not npm:
         print("FAIL npm is required for frontend release verification.", flush=True)
         return 1
+    python = ensure_release_python()
 
     checks: list[tuple[str, list[str], Path]] = [
-        (
-            "Python compile",
-            [sys.executable, "-m", "py_compile", "start_jobfiller.py", "scripts/doctor.py", "scripts/verify_release.py"],
-            ROOT,
-        ),
-        ("Backend tests", [sys.executable, "-m", "pytest", "-q"], ROOT),
-        ("Clone doctor", [sys.executable, "scripts/doctor.py"], ROOT),
+        ("Python compile", [python, "-m", "py_compile", "start_jobfiller.py", "scripts/doctor.py", "scripts/verify_release.py"], ROOT),
+        ("Backend tests", [python, "-m", "pytest", "-q"], ROOT),
+        ("Clone doctor", [python, "scripts/doctor.py"], ROOT),
     ]
 
     if not args.skip_npm_ci and not (FRONTEND / "node_modules").exists():
@@ -56,7 +80,7 @@ def main() -> int:
         [
             ("Frontend tests", [npm, "test"], FRONTEND),
             ("Frontend production build", [npm, "run", "build"], FRONTEND),
-            ("Startup smoke", [sys.executable, "start_jobfiller.py", "--smoke", "--startup-budget", "30"], ROOT),
+            ("Startup smoke", [python, "start_jobfiller.py", "--smoke", "--startup-budget", "30"], ROOT),
         ]
     )
 

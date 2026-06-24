@@ -9,6 +9,8 @@ from app.backend import __version__
 def test_release_artifacts_exist_for_github_distribution() -> None:
     required_paths = [
         Path(".github/workflows/ci.yml"),
+        Path("requirements.txt"),
+        Path("requirements-dev.txt"),
         Path("start_jobfiller.py"),
         Path("scripts/doctor.py"),
         Path("scripts/verify_release.py"),
@@ -36,6 +38,7 @@ def test_ci_runs_backend_and_frontend_validation() -> None:
     assert "uses: actions/checkout@v4" in workflow
     assert "uses: actions/setup-python@v5" in workflow
     assert "uses: actions/setup-node@v4" in workflow
+    assert "python -m pip install -r requirements-dev.txt" in workflow
     assert "python -m pytest -q" in workflow
     assert "python -m py_compile start_jobfiller.py scripts/doctor.py scripts/verify_release.py" in workflow
     assert "python scripts/doctor.py" in workflow
@@ -49,6 +52,7 @@ def test_release_verification_script_runs_core_checks() -> None:
     source = Path("scripts/verify_release.py").read_text(encoding="utf-8")
 
     assert '"pytest", "-q"' in source
+    assert "requirements-dev.txt" in source
     assert '"scripts/verify_release.py"' in source
     assert '"scripts/doctor.py"' in source
     assert '"npm", "test"' in source or 'npm, "test"' in source

@@ -50,6 +50,7 @@ python scripts/verify_release.py
 Or run the same checks manually:
 
 ```powershell
+python -m pip install -r requirements-dev.txt
 python -m pytest -q
 python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py
 python scripts/doctor.py

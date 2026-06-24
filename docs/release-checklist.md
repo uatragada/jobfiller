@@ -5,6 +5,7 @@ JobFiller from a fresh clone.
 
 - Git worktree is clean except ignored local runtime artifacts.
 - `python scripts/verify_release.py` passes.
+- Runtime dependencies stay in `requirements.txt`; test/development dependencies stay in `requirements-dev.txt`.
 - `python -m pytest -q` passes.
 - `python -m py_compile start_jobfiller.py scripts\doctor.py scripts\verify_release.py` passes.
 - `python scripts/doctor.py` passes.
