@@ -51,6 +51,12 @@ $env:JOBFILLER_REUSE_BACKEND = "true"   # optional; reuse instead of restart
 Run the backend and frontend checks before sharing a branch or release:
 
 ```powershell
+python scripts/verify_release.py
+```
+
+Or run the underlying checks individually:
+
+```powershell
 python -m pytest -q
 python -m py_compile start_jobfiller.py
 python scripts/doctor.py
@@ -135,3 +141,5 @@ runtime tokens, logs, and workbooks under ignored directories such as `outputs/`
 and `artifacts/`. Review generated files before sharing them.
 
 JobFiller is distributed under the MIT license; see [LICENSE](LICENSE).
+Contributor and security guidance live in [CONTRIBUTING.md](CONTRIBUTING.md)
+and [SECURITY.md](SECURITY.md).

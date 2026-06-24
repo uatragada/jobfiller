@@ -11,12 +11,15 @@ def test_release_artifacts_exist_for_github_distribution() -> None:
         Path(".github/workflows/ci.yml"),
         Path("start_jobfiller.py"),
         Path("scripts/doctor.py"),
+        Path("scripts/verify_release.py"),
         Path("scripts/Publish-JobFiller.ps1"),
         Path("docs/publishing.md"),
         Path("docs/release-checklist.md"),
         Path("docs/agent-workflows.md"),
         Path("examples/mcp-export.sample.json"),
         Path("CHANGELOG.md"),
+        Path("CONTRIBUTING.md"),
+        Path("SECURITY.md"),
         Path(".env.example"),
         Path(".editorconfig"),
         Path(".gitattributes"),
@@ -39,6 +42,16 @@ def test_ci_runs_backend_and_frontend_validation() -> None:
     assert "npm ci" in workflow
     assert "npm test" in workflow
     assert "npm run build" in workflow
+
+
+def test_release_verification_script_runs_core_checks() -> None:
+    source = Path("scripts/verify_release.py").read_text(encoding="utf-8")
+
+    assert '"pytest", "-q"' in source
+    assert '"scripts/doctor.py"' in source
+    assert '"npm", "test"' in source or 'npm, "test"' in source
+    assert '"npm", "run", "build"' in source or 'npm, "run", "build"' in source
+    assert "node_modules" in source
 
 
 def test_publish_script_requires_clean_authenticated_github_cli() -> None:
@@ -67,6 +80,9 @@ def test_clone_readiness_docs_and_examples_cover_agent_imports() -> None:
 
     assert "docs/agent-workflows.md" in readme
     assert "examples/mcp-export.sample.json" in readme
+    assert "scripts/verify_release.py" in readme
+    assert "CONTRIBUTING.md" in readme
+    assert "SECURITY.md" in readme
     assert "export_jobs_to_jobfiller" in workflow_doc
     assert "Do not apply" in workflow_doc
     assert '"process": false' in sample

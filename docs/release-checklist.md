@@ -4,6 +4,7 @@ Use this checklist before making a GitHub release or asking another user to run
 JobFiller from a fresh clone.
 
 - Git worktree is clean except ignored local runtime artifacts.
+- `python scripts/verify_release.py` passes.
 - `python -m pytest -q` passes.
 - `python -m py_compile start_jobfiller.py` passes.
 - `python scripts/doctor.py` passes.
@@ -18,3 +19,4 @@ JobFiller from a fresh clone.
 - `outputs/`, `artifacts/`, generated resumes, generated cover letters, and runtime tokens are not tracked.
 - `.env.example` is tracked, but real `.env` files are ignored.
 - README quick-start, validation, MCP, and publishing instructions match the current scripts.
+- `CONTRIBUTING.md` and `SECURITY.md` describe local development, privacy boundaries, and responsible reporting.

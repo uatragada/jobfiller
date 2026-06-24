@@ -44,6 +44,12 @@ git push -u origin master
 Run these before publishing:
 
 ```powershell
+python scripts/verify_release.py
+```
+
+Or run the same checks manually:
+
+```powershell
 python -m pytest -q
 python -m py_compile start_jobfiller.py
 python scripts/doctor.py
