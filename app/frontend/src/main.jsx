@@ -34,6 +34,8 @@ import {
 import { api } from "./api";
 import "./styles.css";
 
+const APP_VERSION = "0.2.0";
+
 const LOCATION_GROUPS = [
   { title: "Remote First", items: ["Remote", "Hybrid", "Timezone-Aligned Remote", "Remote Global", "Open to Relocation"] },
   { title: "Work Model", items: ["Onsite", "Hybrid", "Remote", "Open to Relocation"] },
@@ -817,7 +819,7 @@ function Sidebar({ jobs, openQuestions, facts, openPage, page, settings }) {
         </div>
         <hr />
         <p><Database size={14} /> DB: jobfiller.db</p>
-        <p>Version: 0.1.0</p>
+        <p>Version: {APP_VERSION}</p>
       </div>
     </aside>
   );

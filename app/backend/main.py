@@ -5,6 +5,7 @@ import os
 import secrets
 import subprocess
 import urllib.request
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -14,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from . import __version__
 from .database import get_db, init_db
 from .models import Artifact, Grade, Job, ProfileFact, Question, Run, utcnow
 from .schemas import (
@@ -62,7 +64,18 @@ API_CAPABILITIES = {
     "token_required_for_local_writes": True,
 }
 
-app = FastAPI(title="JobFiller", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):  # noqa: ANN201
+    init_db()
+    await worker.start()
+    try:
+        yield
+    finally:
+        await worker.stop()
+
+
+app = FastAPI(title="JobFiller", version=__version__, lifespan=lifespan)
 _configured_origins = [origin.strip() for origin in os.environ.get("JOBFILLER_ALLOWED_ORIGINS", "").split(",")]
 _default_origins = ["http://127.0.0.1:5173", "http://localhost:5173"]
 _origin_allowlist = list(dict.fromkeys([*_default_origins, *[origin for origin in _configured_origins if origin]]))
@@ -127,17 +140,6 @@ async def require_local_mutation_token(request: Request, call_next):  # noqa: AN
         if not secrets.compare_digest(supplied, local_mutation_token()):
             return JSONResponse({"detail": "Missing or invalid local JobFiller token."}, status_code=403)
     return await call_next(request)
-
-
-@app.on_event("startup")
-async def startup() -> None:
-    init_db()
-    await worker.start()
-
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    await worker.stop()
 
 
 def job_out(job: Job) -> JobOut:
@@ -269,7 +271,7 @@ def validate_import_urls(payload: ImportJobRequest) -> None:
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
-    return {"status": "ok", "capabilities": API_CAPABILITIES}
+    return {"status": "ok", "version": __version__, "capabilities": API_CAPABILITIES}
 
 
 @app.get("/api/session")

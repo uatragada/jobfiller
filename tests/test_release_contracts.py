@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+
+from app.backend import __version__
 
 
 def test_release_artifacts_exist_for_github_distribution() -> None:
@@ -13,6 +16,7 @@ def test_release_artifacts_exist_for_github_distribution() -> None:
         Path("docs/release-checklist.md"),
         Path("docs/agent-workflows.md"),
         Path("examples/mcp-export.sample.json"),
+        Path("CHANGELOG.md"),
         Path(".env.example"),
         Path(".editorconfig"),
         Path(".gitattributes"),
@@ -77,3 +81,21 @@ def test_env_example_is_tracked_but_real_env_files_are_ignored() -> None:
     assert "!.env.example" in gitignore
     assert "JOBFILLER_OLLAMA_MODEL" in env_example
     assert "JOBFILLER_ALLOW_REMOTE_OLLAMA=false" in env_example
+
+
+def test_release_version_metadata_is_consistent() -> None:
+    backend_init = Path("app/backend/__init__.py").read_text(encoding="utf-8")
+    backend_settings = Path("app/backend/settings.py").read_text(encoding="utf-8")
+    frontend_source = Path("app/frontend/src/main.jsx").read_text(encoding="utf-8")
+    frontend_package = json.loads(Path("app/frontend/package.json").read_text(encoding="utf-8"))
+    frontend_lock = json.loads(Path("app/frontend/package-lock.json").read_text(encoding="utf-8"))
+    changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+
+    assert __version__ == "0.2.0"
+    assert f'__version__ = "{__version__}"' in backend_init
+    assert '"version": __version__' in backend_settings
+    assert f'const APP_VERSION = "{__version__}";' in frontend_source
+    assert frontend_package["version"] == __version__
+    assert frontend_lock["version"] == __version__
+    assert frontend_lock["packages"][""]["version"] == __version__
+    assert f"## {__version__}" in changelog

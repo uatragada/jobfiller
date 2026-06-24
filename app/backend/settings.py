@@ -6,6 +6,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from . import __version__
+
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_ROOT = Path(os.environ.get("JOBFILLER_OUTPUT_DIR", ROOT / "outputs")).resolve()
@@ -15,7 +17,7 @@ SETTINGS_PATH = Path(os.environ.get("JOBFILLER_SETTINGS_PATH", OUTPUT_ROOT / "se
 DEFAULT_SETTINGS: dict[str, Any] = {
     "app": {
         "name": "JobFiller",
-        "version": "0.2.0",
+        "version": __version__,
     },
     "candidate": {
         "name": "",

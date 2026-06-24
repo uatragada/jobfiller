@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.backend.database import Base, get_db
 from app.backend.main import app
+from app.backend import __version__
 
 
 client = TestClient(app)
@@ -51,6 +52,7 @@ def test_health_advertises_required_answer_fix_capability() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
+    assert payload["version"] == __version__
     assert payload["capabilities"]["question_answer_autoflush_fix"] is True
 
 
