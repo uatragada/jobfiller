@@ -74,6 +74,7 @@ def test_default_runtime_dependencies_stay_lean() -> None:
     assert "pytest" not in runtime_requirements
     assert "httpx" not in runtime_requirements
     assert "pdfplumber" not in runtime_requirements
+    assert "reportlab" not in runtime_requirements
     assert "pytest==9.1.1" in dev_requirements
     assert "httpx2==2.4.0" in dev_requirements
     assert "pdfplumber==0.11.10" in optional_requirements

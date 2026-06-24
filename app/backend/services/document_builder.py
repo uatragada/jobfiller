@@ -4,12 +4,12 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-from reportlab.lib.pagesizes import LETTER
-from reportlab.pdfgen import canvas
-
 from ..settings import candidate_profile
 from ..models import Job
 from .text_utils import escape_tex, slugify, split_list
+
+
+LETTER = (612.0, 792.0)
 
 
 DEFAULT_EXPERIENCE = [
@@ -35,6 +35,89 @@ DEFAULT_PROJECTS = [
         ],
     }
 ]
+
+
+def _pdf_text(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+class SimplePdfCanvas:
+    def __init__(self, path: Path, pagesize: tuple[float, float] = LETTER) -> None:
+        self.path = path
+        self.width, self.height = pagesize
+        self.font_name = "Helvetica"
+        self.font_size = 10.0
+        self.title = ""
+        self.author = ""
+        self.commands: list[str] = []
+
+    def setTitle(self, title: str) -> None:  # noqa: N802 - mirrors common PDF canvas APIs.
+        self.title = title
+
+    def setAuthor(self, author: str) -> None:  # noqa: N802 - mirrors common PDF canvas APIs.
+        self.author = author
+
+    def setFont(self, name: str, size: float) -> None:  # noqa: N802 - mirrors common PDF canvas APIs.
+        self.font_name = "Helvetica-Bold" if "bold" in name.lower() else "Helvetica"
+        self.font_size = float(size)
+
+    def _font_ref(self) -> str:
+        return "F2" if self.font_name == "Helvetica-Bold" else "F1"
+
+    def _text_width(self, text: str) -> float:
+        return len(text) * self.font_size * 0.48
+
+    def drawString(self, x: float, y: float, text: str) -> None:  # noqa: N802 - mirrors common PDF canvas APIs.
+        self.commands.append(
+            f"BT /{self._font_ref()} {self.font_size:.2f} Tf {x:.2f} {y:.2f} Td ({_pdf_text(text)}) Tj ET"
+        )
+
+    def drawRightString(self, x: float, y: float, text: str) -> None:  # noqa: N802 - mirrors common PDF canvas APIs.
+        self.drawString(x - self._text_width(text), y, text)
+
+    def drawCentredString(self, x: float, y: float, text: str) -> None:  # noqa: N802 - mirrors common PDF canvas APIs.
+        self.drawString(x - (self._text_width(text) / 2), y, text)
+
+    def line(self, x1: float, y1: float, x2: float, y2: float) -> None:
+        self.commands.append(f"{x1:.2f} {y1:.2f} m {x2:.2f} {y2:.2f} l S")
+
+    def save(self) -> None:
+        content = "\n".join(self.commands).encode("latin-1", errors="replace")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {self.width:.2f} {self.height:.2f}] "
+                "/Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>"
+            ).encode("ascii"),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+            b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream",
+            (
+                f"<< /Title ({_pdf_text(self.title)}) /Author ({_pdf_text(self.author)}) "
+                "/Creator (JobFiller) >>"
+            ).encode("latin-1", errors="replace"),
+        ]
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("wb") as handle:
+            handle.write(b"%PDF-1.4\n")
+            offsets = [0]
+            for number, payload in enumerate(objects, start=1):
+                offsets.append(handle.tell())
+                handle.write(f"{number} 0 obj\n".encode("ascii"))
+                handle.write(payload)
+                handle.write(b"\nendobj\n")
+            xref_offset = handle.tell()
+            handle.write(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+            handle.write(b"0000000000 65535 f \n")
+            for offset in offsets[1:]:
+                handle.write(f"{offset:010d} 00000 n \n".encode("ascii"))
+            handle.write(
+                (
+                    f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R /Info 7 0 R >>\n"
+                    f"startxref\n{xref_offset}\n%%EOF\n"
+                ).encode("ascii")
+            )
 
 
 def profile_ready(profile: dict[str, Any] | None = None) -> bool:
@@ -292,7 +375,7 @@ def make_cover_letter(job: Job) -> str:
     ).strip() + "\n"
 
 
-def draw_wrapped(c: canvas.Canvas, text: str, x: float, y: float, chars: int, size: float = 8.2, leading: float = 9.1) -> float:
+def draw_wrapped(c: SimplePdfCanvas, text: str, x: float, y: float, chars: int, size: float = 8.2, leading: float = 9.1) -> float:
     c.setFont("Helvetica", size)
     for line in textwrap.wrap(text, width=chars, break_long_words=False, break_on_hyphens=False):
         c.drawString(x, y, line)
@@ -305,7 +388,7 @@ def build_pdf(job: Job, pdf_path: Path) -> None:
     name = str(profile.get("name") or "Your Name").strip()
     contact_line = " | ".join(_contact_parts(profile)) or "Add contact information in Settings"
 
-    c = canvas.Canvas(str(pdf_path), pagesize=LETTER)
+    c = SimplePdfCanvas(pdf_path, pagesize=LETTER)
     c.setTitle(f"{name} Resume - {job.company}")
     c.setAuthor(name)
     width, height = LETTER
