@@ -57,6 +57,7 @@ def test_source_tree_does_not_embed_static_credentials() -> None:
         Path("docs"),
         Path("helpers"),
         Path("integrations"),
+        Path("scripts"),
         Path("tests"),
         Path("examples"),
         Path(".codex"),
@@ -64,6 +65,10 @@ def test_source_tree_does_not_embed_static_credentials() -> None:
     source_files = [
         Path("README.md"),
         Path("Start-JobFiller.ps1"),
+        Path("start_jobfiller.py"),
+        Path("CHANGELOG.md"),
+        Path("CONTRIBUTING.md"),
+        Path("SECURITY.md"),
         Path(".mcp.json"),
         Path(".gitignore"),
         Path("requirements.txt"),
