@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Optional: enables stricter PDF text extraction during local resume grading.
+pdfplumber==0.11.10

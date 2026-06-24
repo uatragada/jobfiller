@@ -83,6 +83,7 @@ def check_required_files() -> tuple[bool, str]:
     required = [
         "requirements.txt",
         "requirements-dev.txt",
+        "requirements-optional.txt",
         "app/frontend/package-lock.json",
         "start_jobfiller.py",
         "Start-JobFiller.ps1",

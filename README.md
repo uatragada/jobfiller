@@ -107,6 +107,13 @@ $env:OLLAMA_URL = "http://127.0.0.1:11434"
 
 You can also configure the Ollama URL and model from the dashboard Settings page.
 
+For stricter PDF text extraction during local resume grading, install the
+optional dependency set:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-optional.txt
+```
+
 ## Bulk Imports
 
 Agents and scripts can import multiple job records with `POST /api/imports/bulk`. See [docs/agent-import-contract.md](docs/agent-import-contract.md) for the payload and response contract.

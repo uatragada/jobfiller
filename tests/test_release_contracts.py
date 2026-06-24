@@ -11,6 +11,7 @@ def test_release_artifacts_exist_for_github_distribution() -> None:
         Path(".github/workflows/ci.yml"),
         Path("requirements.txt"),
         Path("requirements-dev.txt"),
+        Path("requirements-optional.txt"),
         Path("start_jobfiller.py"),
         Path("scripts/doctor.py"),
         Path("scripts/verify_release.py"),
@@ -59,6 +60,19 @@ def test_release_verification_script_runs_core_checks() -> None:
     assert '"npm", "run", "build"' in source or 'npm, "run", "build"' in source
     assert '"start_jobfiller.py", "--smoke", "--startup-budget", "30"' in source
     assert "node_modules" in source
+
+
+def test_default_runtime_dependencies_stay_lean() -> None:
+    runtime_requirements = Path("requirements.txt").read_text(encoding="utf-8")
+    dev_requirements = Path("requirements-dev.txt").read_text(encoding="utf-8")
+    optional_requirements = Path("requirements-optional.txt").read_text(encoding="utf-8")
+
+    assert "pytest" not in runtime_requirements
+    assert "httpx" not in runtime_requirements
+    assert "pdfplumber" not in runtime_requirements
+    assert "pytest==9.1.1" in dev_requirements
+    assert "httpx2==2.4.0" in dev_requirements
+    assert "pdfplumber==0.11.10" in optional_requirements
 
 
 def test_publish_script_requires_clean_authenticated_github_cli() -> None:

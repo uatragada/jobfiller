@@ -59,7 +59,7 @@ def extract_pdf_text(path: str) -> tuple[str, int]:
     try:
         import pdfplumber
     except Exception:  # pragma: no cover - optional dependency
-        return "PDF text extraction unavailable in this environment.", 0
+        return "PDF text extraction unavailable; install requirements-optional.txt for stricter PDF grading.", 0
     try:
         with pdfplumber.open(path) as pdf:
             return "\n".join((page.extract_text() or "") for page in pdf.pages), len(pdf.pages)
