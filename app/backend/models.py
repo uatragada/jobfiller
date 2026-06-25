@@ -28,6 +28,12 @@ class Job(Base):
     source: Mapped[str] = mapped_column(String(80), default="manual")
     fit_score: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(40), default="DISCOVERED")
+    application_state: Mapped[str] = mapped_column(String(40), default="DISCOVERED")
+    follow_up_action: Mapped[str] = mapped_column(Text, default="")
+    follow_up_due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status_email_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status_email_subject: Mapped[str] = mapped_column(Text, default="")
+    last_status_email_url: Mapped[str] = mapped_column(Text, default="")
     role_family: Mapped[str] = mapped_column(String(240), default="")
     key_requirements: Mapped[str] = mapped_column(Text, default="")
     keywords: Mapped[str] = mapped_column(Text, default="")
@@ -46,6 +52,31 @@ class Job(Base):
     questions: Mapped[list["Question"]] = relationship(back_populates="job", cascade="all, delete-orphan")
     artifacts: Mapped[list["Artifact"]] = relationship(back_populates="job", cascade="all, delete-orphan")
     grades: Mapped[list["Grade"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+    application_events: Mapped[list["ApplicationEvent"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+
+
+class ApplicationEvent(Base):
+    __tablename__ = "application_events"
+    __table_args__ = (UniqueConstraint("source", "external_id", name="uq_application_events_source_external_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
+    source: Mapped[str] = mapped_column(String(80), default="gmail")
+    external_id: Mapped[str] = mapped_column(String(240))
+    thread_id: Mapped[str] = mapped_column(String(240), default="")
+    sender: Mapped[str] = mapped_column(Text, default="")
+    subject: Mapped[str] = mapped_column(Text, default="")
+    snippet: Mapped[str] = mapped_column(Text, default="")
+    body_excerpt: Mapped[str] = mapped_column(Text, default="")
+    state: Mapped[str] = mapped_column(String(40), default="APPLIED")
+    follow_up_action: Mapped[str] = mapped_column(Text, default="")
+    action_url: Mapped[str] = mapped_column(Text, default="")
+    evidence_url: Mapped[str] = mapped_column(Text, default="")
+    received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    job: Mapped[Job] = relationship(back_populates="application_events")
 
 
 class JobPost(Base):

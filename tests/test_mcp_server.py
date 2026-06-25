@@ -28,7 +28,12 @@ def test_mcp_initialize_and_tool_list_contract() -> None:
 
     listed = decode(json.dumps(mcp.handle_request({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})))
     tool_names = {tool["name"] for tool in listed["result"]["tools"]}
-    assert {"export_jobs_to_jobfiller", "validate_jobfiller_export", "jobfiller_status"} <= tool_names
+    assert {
+        "export_jobs_to_jobfiller",
+        "export_application_emails_to_jobfiller",
+        "validate_jobfiller_export",
+        "jobfiller_status",
+    } <= tool_names
 
 
 def test_mcp_validate_tool_reports_row_errors_without_api_call() -> None:
@@ -188,6 +193,76 @@ def test_mcp_export_forwards_valid_jobs_to_bulk_import(monkeypatch: pytest.Monke
     ]
     payload = json.loads(response["result"]["content"][0]["text"])
     assert payload["response"]["job_ids"] == [123]
+
+
+def test_mcp_email_export_forwards_messages_to_email_sync(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, dict, dict]] = []
+    monkeypatch.setenv("JOBFILLER_LOCAL_TOKEN", "test-token")
+
+    def fake_json_request(
+        method: str,
+        url: str,
+        body: dict | None = None,
+        timeout: float = 20.0,  # noqa: ARG001
+        headers: dict | None = None,
+    ) -> dict:
+        calls.append((method, url, body or {}, headers or {}))
+        return {"synced": len((body or {}).get("messages") or []), "job_ids": [321], "event_ids": [654], "states": {"APPLIED": 1}}
+
+    monkeypatch.setattr(mcp, "_json_request", fake_json_request)
+
+    response = mcp.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 16,
+            "method": "tools/call",
+            "params": {
+                "name": "export_application_emails_to_jobfiller",
+                "arguments": {
+                    "source": "gmail-deep-scan",
+                    "api_base": "http://127.0.0.1:8001/api",
+                    "messages": [
+                        {
+                            "id": "gmail-message-1",
+                            "thread_id": "gmail-thread-1",
+                            "from": "Example Careers noreply@example.com",
+                            "subject": "Thanks for applying to Backend Engineer",
+                            "body": "We received your application.",
+                            "email_ts": "2026-06-24T14:15:00+00:00",
+                            "display_url": "https://mail.example.test/messages/gmail-message-1",
+                        }
+                    ],
+                },
+            },
+        }
+    )
+
+    assert response is not None
+    assert response["result"]["isError"] is False
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:8001/api/email-sync/applications",
+            {
+                "source": "gmail-deep-scan",
+                "messages": [
+                    {
+                        "id": "gmail-message-1",
+                        "thread_id": "gmail-thread-1",
+                        "from": "Example Careers noreply@example.com",
+                        "subject": "Thanks for applying to Backend Engineer",
+                        "body": "We received your application.",
+                        "email_ts": "2026-06-24T14:15:00+00:00",
+                        "display_url": "https://mail.example.test/messages/gmail-message-1",
+                    }
+                ],
+            },
+            {"X-JobFiller-Token": "test-token"},
+        )
+    ]
+    payload = json.loads(response["result"]["content"][0]["text"])
+    assert payload["submitted"] == 1
+    assert payload["response"]["event_ids"] == [654]
 
 
 def test_mcp_export_defaults_to_runtime_api_base_and_no_processing(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

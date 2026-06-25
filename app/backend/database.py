@@ -48,6 +48,12 @@ def _ensure_job_columns() -> None:
         "materials": "ALTER TABLE jobs ADD COLUMN materials TEXT DEFAULT ''",
         "manual_questions": "ALTER TABLE jobs ADD COLUMN manual_questions TEXT DEFAULT ''",
         "salary": "ALTER TABLE jobs ADD COLUMN salary VARCHAR(200) DEFAULT ''",
+        "application_state": "ALTER TABLE jobs ADD COLUMN application_state VARCHAR(40) DEFAULT 'DISCOVERED'",
+        "follow_up_action": "ALTER TABLE jobs ADD COLUMN follow_up_action TEXT DEFAULT ''",
+        "follow_up_due_at": "ALTER TABLE jobs ADD COLUMN follow_up_due_at DATETIME",
+        "last_status_email_at": "ALTER TABLE jobs ADD COLUMN last_status_email_at DATETIME",
+        "last_status_email_subject": "ALTER TABLE jobs ADD COLUMN last_status_email_subject TEXT DEFAULT ''",
+        "last_status_email_url": "ALTER TABLE jobs ADD COLUMN last_status_email_url TEXT DEFAULT ''",
     }
     for column, sql in required_columns.items():
         if column not in existing_columns:

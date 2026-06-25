@@ -37,7 +37,7 @@ def ensure_release_python() -> str:
         if not run_step("Python virtual environment", [sys.executable, "-m", "venv", str(ROOT / ".venv")]):
             raise SystemExit(1)
     probe = subprocess.run(
-        [str(python), "-c", "import fastapi, sqlalchemy, uvicorn, pydantic, pytest, httpx2"],
+        [str(python), "-c", "import fastapi, sqlalchemy, uvicorn, pydantic, pytest, httpx"],
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

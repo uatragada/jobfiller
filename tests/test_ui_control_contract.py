@@ -4,106 +4,170 @@ import re
 from pathlib import Path
 
 
-def _frontend_source() -> str:
-    return Path("app/frontend/src/main.jsx").read_text(encoding="utf-8")
+CONTRACT_PATHS = [
+    Path("app/frontend/src/layout/TopCommandBar.jsx"),
+    Path("app/frontend/src/layout/SidebarNav.jsx"),
+    Path("app/frontend/src/pages/WorkflowPage.jsx"),
+    Path("app/frontend/src/components/ui/index.jsx"),
+    Path("app/frontend/src/components/jobfiller-ui.jsx"),
+]
 
 
-
-def test_question_queue_testids_are_hardcoded() -> None:
-    source = _frontend_source()
-
-    expected = [
-        'data-testid="dashboard-question-sort"',
-        'data-testid="question-open-list"',
-        'data-testid="question-view-all"',
-    ]
-
-    for marker in expected:
-        assert marker in source, f"Missing frontend contract marker {marker}"
+def _frontend_source(*paths: Path) -> str:
+    selected = paths or tuple(CONTRACT_PATHS)
+    return "\n".join(path.read_text(encoding="utf-8") for path in selected)
 
 
-def test_question_row_dynamic_testids_are_template_literals() -> None:
-    source = _frontend_source()
-
-    for template_key in ["question-answer", "question-save", "question-skip", "question-open"]:
-        pattern = rf"data-testid=\{{`{template_key}-\$\{{q\.id\}}`\}}"
-        assert re.search(pattern, source), f"Missing dynamic question row marker for {template_key}"
+def _assert_static_testid(source: str, test_id: str) -> None:
+    pattern = rf"(?:data-testid|testId)=['\"]{re.escape(test_id)}['\"]"
+    assert re.search(pattern, source), f"Missing real static test id {test_id}"
 
 
-def test_srs_page_controls_have_stable_testids() -> None:
-    source = _frontend_source()
+def _assert_dynamic_testid(source: str, template_key: str) -> None:
+    prop_pattern = rf"(?:data-testid|testId)=\{{`{re.escape(template_key)}-\$\{{[^}}]+}}\`}}"
+    config_pattern = rf"{re.escape(template_key)}-\$\{{[^}}]+}}"
+    assert re.search(prop_pattern, source) or re.search(config_pattern, source), f"Missing real dynamic test id for {template_key}"
 
-    expected = [
-        # Top command bar and sidebar.
-        'data-testid="scan-now"',
-        'data-testid="import-url-input"',
-        'data-testid="import-url-button"',
-        'data-testid="health-pill-scanner"',
-        'data-testid="health-pill-worker"',
-        'data-testid="health-pill-llm"',
-        'data-testid="command-open-settings"',
-        'data-testid="top-user-menu"',
-        'data-testid="top-user-settings"',
-        'data-testid="nav-jobs"',
-        'data-testid="nav-questions"',
-        'data-testid="nav-facts"',
-        'data-testid="nav-runs"',
-        'data-testid="nav-reprocess"',
-        'data-testid="nav-agent"',
-        'data-testid="nav-assist"',
-        'data-testid="nav-export"',
-        'data-testid="nav-settings"',
-        'data-testid="nav-health"',
-        # Jobs workspace controls.
-        'data-testid="jobs-search"',
-        'data-testid="setup-open-settings"',
-        'data-testid="setup-open-agent"',
-        'data-testid="setup-scan-now"',
-        'data-testid="jobs-filter-status"',
-        'data-testid="jobs-filter-source"',
-        'data-testid="jobs-location-toggle"',
-        'data-testid="jobs-filter-work-model"',
-        'data-testid="jobs-sort"',
-        'data-testid="jobs-advanced-toggle"',
-        'data-testid="advanced-clear-filters"',
-        'data-testid="location-clear"',
-        'data-testid="location-apply"',
-        'data-testid="jobs-select-all"',
-        'data-testid="jobs-page-prev"',
-        'data-testid="jobs-page-next"',
-        'data-testid="jobs-page-size"',
-        # Utility pages.
-        'data-testid="questions-search"',
-        'data-testid="questions-status-filter"',
-        'data-testid="questions-tag-filter"',
-        'data-testid="questions-sort"',
-        'data-testid="fact-tag-input"',
-        'data-testid="fact-question-input"',
-        'data-testid="fact-confidence-input"',
-        'data-testid="fact-answer-input"',
-        'data-testid="fact-save"',
-        'data-testid="reprocess-selected"',
-        'data-testid="agent-copy-payload"',
-        'data-testid="assist-file-input"',
-        'data-testid="assist-parse-files"',
-        'data-testid="assist-launch-helper"',
-        'data-testid="export-workbook"',
-        'data-testid="settings-save"',
-        'data-testid="model-health-refresh"',
-        'data-testid="model-health-loading"',
-        # Detail panel and modals.
-        'data-testid="inspector-close"',
-        'data-testid="grade-open-report"',
-        'data-testid="report-modal-close"',
-        'data-testid="artifact-editor-textarea"',
-        'data-testid="artifact-editor-close"',
-        'data-testid="artifact-editor-cancel"',
-        'data-testid="save-artifact-editor"',
-        'data-testid="notes-save"',
-    ]
 
-    for marker in expected:
-        assert marker in source, f"Missing SRS control marker {marker}"
+def test_main_entrypoint_does_not_hold_static_contract_markers() -> None:
+    source = Path("app/frontend/src/main.jsx").read_text(encoding="utf-8")
+
+    assert "SRS_CONTROL_MARKERS" not in source
+    assert "SRS static control patterns" not in source
+
+
+def test_top_command_bar_controls_have_real_testids() -> None:
+    source = _frontend_source(Path("app/frontend/src/layout/TopCommandBar.jsx"))
+
+    for test_id in [
+        "scan-now",
+        "import-url-input",
+        "import-url-button",
+        "health-pill-scanner",
+        "health-pill-worker",
+        "health-pill-llm",
+        "command-open-settings",
+        "top-user-menu",
+        "top-user-settings",
+    ]:
+        _assert_static_testid(source, test_id)
+
+
+def test_sidebar_navigation_uses_route_backed_testids() -> None:
+    source = _frontend_source(Path("app/frontend/src/layout/SidebarNav.jsx"), Path("app/frontend/src/router/routes.jsx"))
+
+    assert 'data-testid={navTestIds[route.id] || `nav-${route.id}`}' in source
+    for route_id in ["jobs", "questions", "settings"]:
+        assert f'id: "{route_id}"' in source
+    for test_id in ["nav-tomorrow", "nav-facts", "nav-runs", "nav-reprocess", "nav-agent", "nav-assist", "nav-export", "nav-health"]:
+        assert f'"{test_id}"' in source
+
+
+def test_filter_table_and_pagination_controls_are_rendered_from_real_props() -> None:
+    source = _frontend_source(Path("app/frontend/src/components/ui/index.jsx"), Path("app/frontend/src/pages/WorkflowPage.jsx"))
+
+    for marker in [
+        "`${testIdPrefix}-search`",
+        "`${testIdPrefix}-filter-${testIdKey(filter.key)}`",
+        "`${testIdPrefix}-advanced-toggle`",
+        "`${testIdPrefix}-page-prev`",
+        "`${testIdPrefix}-page-next`",
+        "`${testIdPrefix}-page-size`",
+        'testIdPrefix={pageId}',
+    ]:
+        assert marker in source
+
+    for marker in [
+        'filter("status", "Status"',
+        'filter("source", "Source"',
+        'filter("workModel", "Work model"',
+    ]:
+        assert marker in source
+
+    for test_id in [
+        "jobs-sort",
+        "jobs-sort-posted",
+        "jobs-sort-imported",
+        "jobs-sort-source",
+        "jobs-sort-company",
+        "jobs-sort-role",
+        "jobs-sort-location",
+        "jobs-sort-status",
+        "jobs-sort-fit",
+        "jobs-sort-grade",
+        "jobs-sort-ready",
+        "jobs-sort-artifacts",
+        "advanced-clear-filters",
+        "jobs-location-toggle",
+        "location-clear",
+        "location-apply",
+        "questions-status-filter",
+        "questions-tag-filter",
+    ]:
+        assert test_id in source
+
+
+def test_question_and_artifact_row_actions_have_dynamic_testids() -> None:
+    source = _frontend_source(Path("app/frontend/src/pages/WorkflowPage.jsx"), Path("app/frontend/src/components/ui/index.jsx"))
+
+    for template_key in [
+        "row",
+        "jobs-role",
+        "artifact-resume-download",
+        "artifact-resume-open",
+        "artifact-resume-tex",
+        "artifact-resume-folder",
+        "artifact-resume-regrade",
+        "artifact-cover-download",
+        "artifact-cover-open",
+        "artifact-cover-folder",
+        "artifact-cover-edit",
+        "artifact-reprocess",
+        "artifact-assist-resume",
+        "artifact-assist-cover",
+        "question-answer",
+        "question-save",
+        "question-skip",
+        "question-open",
+        "inspector-apply",
+    ]:
+        _assert_dynamic_testid(source, template_key)
+
+    assert "rowTestIdPrefix ? `${rowTestIdPrefix}-row-select-${id}`" in source
+    assert 'rowTestIdFor={pageId === "runs-logs" ? (_row, id) => `run-row-${id}` : undefined}' in source
+
+
+def test_static_action_controls_have_real_testids() -> None:
+    source = _frontend_source(Path("app/frontend/src/pages/WorkflowPage.jsx"), Path("app/frontend/src/components/ui/index.jsx"))
+
+    for test_id in [
+        "dashboard-question-sort",
+        "question-open-list",
+        "questions-sort",
+        "fact-tag-input",
+        "fact-question-input",
+        "fact-confidence-input",
+        "fact-answer-input",
+        "fact-save",
+        "reprocess-selected",
+        "assist-file-input",
+        "assist-parse-files",
+        "assist-launch-helper",
+        "export-workbook",
+        "export-link-xlsx",
+        "export-link-json",
+        "export-link-csv",
+        "settings-save",
+        "model-health-refresh",
+        "inspector-close",
+        "grade-open-report",
+        "report-modal-close",
+        "artifact-editor-textarea",
+        "artifact-editor-cancel",
+        "save-artifact-editor",
+        "notes-save",
+    ]:
+        _assert_static_testid(source, test_id)
 
 
 def test_assist_upload_client_requires_explicit_confirmation() -> None:
@@ -112,70 +176,32 @@ def test_assist_upload_client_requires_explicit_confirmation() -> None:
     assert "confirm=review-before-submit" in source
 
 
-def test_dynamic_srs_action_controls_have_template_testids() -> None:
-    source = _frontend_source()
+def test_company_cells_request_real_logo_assets_with_initial_fallback() -> None:
+    source = _frontend_source(Path("app/frontend/src/components/ui/index.jsx"), Path("app/frontend/src/pages/WorkflowPage.jsx"))
+    styles = Path("app/frontend/src/styles/app.css").read_text(encoding="utf-8")
 
-    templates = [
-        "job-row",
-        "jobs-row-select",
-        "jobs-role",
-        "jobs-role-open",
-        "jobs-artifact-resume",
-        "jobs-artifact-latex",
-        "jobs-open-folder",
-        "inspector-apply",
-        "inspector-tab",
-        "artifact-resume-download",
-        "artifact-resume-open",
-        "artifact-resume-tex",
-        "artifact-resume-folder",
-        "artifact-resume-regrade",
-        "artifact-resume-edit",
-        "artifact-cover-download",
-        "artifact-cover-open",
-        "artifact-cover-folder",
-        "artifact-cover-edit",
-        "artifact-reprocess",
-        "artifact-assist-resume",
-        "artifact-assist-cover",
-        "artifact-apply",
-        "fact-edit",
-        "fact-delete",
-        "run-row",
-        "reprocess-job",
-    ]
-
-    for template_key in templates:
-        pattern = rf"data-testid=\{{`{template_key}-\$\{{[^}}]+}}\`}}"
-        assert re.search(pattern, source), f"Missing dynamic SRS action marker for {template_key}"
+    assert "KNOWN_COMPANY_DOMAINS" in source
+    assert "https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64" in source
+    assert "logoUrl={companyLogoUrl" in source
+    assert "onError={() => setLogoFailed(true)}" in source
+    assert ".entityAvatar.hasLogo" in styles
+    assert "object-fit: contain" in styles
 
 
-def test_srs_accessibility_semantics_are_declared() -> None:
-    source = _frontend_source()
+def test_srs_accessibility_semantics_are_declared_on_real_components() -> None:
+    source = _frontend_source(Path("app/frontend/src/components/ui/index.jsx"), Path("app/frontend/src/pages/WorkflowPage.jsx"))
 
-    expected_markers = [
+    for marker in [
         'role="table"',
-        'aria-label="Jobs table"',
-        'aria-label="Blocking questions table"',
+        'aria-label={label}',
         'role="rowgroup"',
         'role="columnheader"',
         'role="row"',
         'role="cell"',
-        'aria-selected={selectedId === job.id}',
+        "aria-selected={isSelected}",
         'role="tablist"',
-        'aria-label="Job detail tabs"',
         'role="tab"',
         'aria-selected={activeTab === tab}',
-        'aria-label="Open settings"',
-        'aria-label="Advanced job filters"',
-        'aria-label="Close location preferences"',
-        'aria-label="Close job detail panel"',
-        'aria-label={`Select ${job.company} ${job.title}`}',
-        'aria-label={`Open ${job.company} resume PDF`}',
-        'aria-label={`Open ${job.company} resume TeX`}',
-        'aria-label={`Open artifact folder for ${job.company}`}',
-        'aria-label={`Open context for ${q.company} question`}',
-    ]
-
-    for marker in expected_markers:
-        assert marker in source, f"Missing SRS accessibility marker {marker}"
+        'label={pageId === "questions" ? "Blocking questions table" : `${title} table`}',
+    ]:
+        assert marker in source

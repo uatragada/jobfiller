@@ -4,6 +4,10 @@ import { createServer } from "vite";
 
 const PORT = Number(process.env.JOBFILLER_DOWNLOAD_TEST_PORT || 5181);
 const now = new Date("2026-06-24T12:00:00.000Z").toISOString();
+const transparentLogoPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+  "base64",
+);
 
 const job = {
   id: 1,
@@ -30,7 +34,7 @@ const job = {
   latest_grade: "A",
   ready_to_send: true,
   latest_resume_pdf_path: "/tmp/jobfiller/outputs/\resumes\\candidate-resume-ramp.pdf",
-  latest_cover_letter_path: "/tmp/jobfiller/outputs/\cover_letters\\candidate-cover-letter-ramp.md",
+    latest_cover_letter_path: "/tmp/jobfiller/outputs/\cover_letters\\candidate-cover-letter-ramp.docx",
   latest_artifact_id: 101,
   artifact_count: 1,
   readiness_score: 91,
@@ -43,6 +47,16 @@ function json(payload, status = 200) {
     contentType: "application/json",
     body: JSON.stringify(payload),
   };
+}
+
+async function mockExternalLogoRequests(context) {
+  await context.route("https://www.google.com/s2/favicons**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "image/png",
+      body: transparentLogoPng,
+    }),
+  );
 }
 
 function attachment(body, contentType, filename) {
@@ -190,6 +204,7 @@ async function main() {
     const baseUrl = viteServer.resolvedUrls?.local?.[0] || `http://127.0.0.1:${PORT}/`;
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 950 } });
+    await mockExternalLogoRequests(context);
     await context.route("**/api/**", handleApi);
     const page = await context.newPage();
     await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -212,6 +227,11 @@ async function main() {
     await page.getByTestId("nav-export").click();
     await page.getByTestId("export-workbook").click();
     await page.getByTestId("export-link-xlsx").waitFor({ state: "visible" });
+    const expectedApiBase = new URL("/api", baseUrl).toString();
+    const workbookHref = await page.getByTestId("export-link-xlsx").getAttribute("href");
+    if (workbookHref !== `${expectedApiBase}/workbook/latest`) {
+      throw new Error(`Expected workbook href to use resolved API base, got ${workbookHref}`);
+    }
     const [workbookDownload] = await Promise.all([
       page.waitForEvent("download"),
       page.getByTestId("export-link-xlsx").click(),

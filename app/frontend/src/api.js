@@ -1,3 +1,7 @@
+const truthyEnv = (value) => ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+
+const API_PORT_SCAN_ENABLED = truthyEnv(import.meta.env?.VITE_JOBFILLER_USE_API);
+
 const DEFAULT_CANDIDATE_BASES = (() => {
   const envBase = typeof import.meta.env?.VITE_API_BASE === "string" ? import.meta.env.VITE_API_BASE.trim() : "";
   const windowBase =
@@ -24,11 +28,13 @@ const DEFAULT_CANDIDATE_BASES = (() => {
   if (normalizedWindowBase.startsWith("http")) candidates.push(normalizedWindowBase);
   if (normalizedQueryBase.startsWith("http")) candidates.push(normalizedQueryBase);
   if (normalizedSameOriginBase.startsWith("http")) candidates.push(normalizedSameOriginBase);
-  const fallbackPorts = Array.from({ length: 121 }, (_, i) => 8000 + i);
-  for (const port of fallbackPorts) {
-    candidates.push(`http://${candidateHost}:${port}/api`);
-    if (candidateHost !== "127.0.0.1") {
-      candidates.push(`http://127.0.0.1:${port}/api`);
+  if (API_PORT_SCAN_ENABLED) {
+    const fallbackPorts = Array.from({ length: 121 }, (_, i) => 8000 + i);
+    for (const port of fallbackPorts) {
+      candidates.push(`http://${candidateHost}:${port}/api`);
+      if (candidateHost !== "127.0.0.1") {
+        candidates.push(`http://127.0.0.1:${port}/api`);
+      }
     }
   }
 
@@ -230,6 +236,7 @@ async function request(path, options = {}) {
 
 export const api = {
   artifactUrl: (path) => apiRequestUrl(resolvedApiBase || "/api", path),
+  downloadUrl: (path) => apiRequestUrl(resolvedApiBase || "/api", path),
   jobs: (sort = "newest", remoteFirst = true) =>
     request(`/api/jobs?sort=${encodeURIComponent(sort)}&remote_first=${remoteFirst ? "true" : "false"}`),
   job: (id) => request(`/api/jobs/${id}`),
@@ -254,9 +261,11 @@ export const api = {
   settings: () => request("/api/settings"),
   updateSettings: (settings) => request("/api/settings", { method: "PUT", body: JSON.stringify({ settings }) }),
   bulkImport: (payload) => request("/api/imports/bulk", { method: "POST", body: JSON.stringify(payload) }),
+  syncApplicationEmails: (payload) => request("/api/email-sync/applications", { method: "POST", body: JSON.stringify(payload) }),
+  applicationEvents: (limit = 50) => request(`/api/application-events?limit=${encodeURIComponent(limit)}`),
   exportWorkbook: () => request("/api/workbook/export", { method: "POST" }),
   exportBundle: () => request("/api/export/workbook", { method: "POST" }),
-  exportDownload: (exportId) => `/api/export/${encodeURIComponent(exportId)}/download`,
+  exportDownload: (exportId) => apiRequestUrl(resolvedApiBase || "/api", `/api/export/${encodeURIComponent(exportId)}/download`),
   artifactContent: (id, kind = "cover-letter") => request(`/api/artifacts/${id}/content?kind=${encodeURIComponent(kind)}`),
   updateArtifactContent: (id, payload) => request(`/api/artifacts/${id}/content`, { method: "PATCH", body: JSON.stringify(payload) }),
   gradeArtifact: (id) => request(`/api/artifacts/${id}/grade`, { method: "POST" }),

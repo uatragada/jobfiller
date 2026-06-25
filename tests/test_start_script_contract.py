@@ -19,3 +19,7 @@ def test_start_script_restarts_backend_by_default_and_requires_reuse_opt_in() ->
     assert "$env:JOBFILLER_ALLOWED_ORIGINS = $FrontendAllowedOrigins" in source
     assert "Backend already healthy on port" in source
     assert "Stop-VisibleJobFillerBackends" in source
+    assert "Is-JobFillerFrontendProcess" in source
+    assert "Stop-JobFillerFrontendProcessesByPort" in source
+    assert "Leaving non-JobFiller listener" in source
+    assert "Stop-ProcessesByPort -Port $candidateFrontendPort" not in source

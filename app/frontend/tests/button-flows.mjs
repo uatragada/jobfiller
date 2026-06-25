@@ -5,6 +5,10 @@ import { createServer } from "vite";
 
 const PORT = Number(process.env.JOBFILLER_BUTTON_TEST_PORT || 5178);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+const transparentLogoPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+  "base64",
+);
 
 const now = new Date("2026-06-24T12:00:00.000Z");
 let artifactRevision = 2;
@@ -67,7 +71,7 @@ const jobs = Array.from({ length: 12 }, (_, index) => {
     latest_grade: id <= 4 ? "A" : "B+",
     ready_to_send: id !== 2,
     latest_resume_pdf_path: hasArtifact ? `/tmp/jobfiller/outputs/\resumes\\candidate-resume-${company.toLowerCase()}.pdf` : null,
-    latest_cover_letter_path: hasArtifact ? `/tmp/jobfiller/outputs/\cover_letters\\candidate-cover-letter-${company.toLowerCase()}.md` : null,
+    latest_cover_letter_path: hasArtifact ? `/tmp/jobfiller/outputs/\cover_letters\\candidate-cover-letter-${company.toLowerCase()}.docx` : null,
     latest_artifact_id: hasArtifact ? 100 + id : null,
     artifact_count: hasArtifact ? 2 : 0,
     readiness_score: id === 2 ? 55 : 90 - id,
@@ -139,6 +143,16 @@ function json(payload, status = 200) {
   };
 }
 
+async function mockExternalLogoRequests(context) {
+  await context.route("https://www.google.com/s2/favicons**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "image/png",
+      body: transparentLogoPng,
+    }),
+  );
+}
+
 function text(payload, contentType = "text/plain") {
   return { status: 200, contentType, body: payload };
 }
@@ -188,7 +202,7 @@ function updateArtifactForJob(jobId) {
   if (!job) return null;
   job.latest_artifact_id = job.latest_artifact_id || 100 + job.id;
   job.latest_resume_pdf_path = `/tmp/jobfiller/outputs/\resumes\\candidate-resume-${job.company.toLowerCase()}.pdf`;
-  job.latest_cover_letter_path = `/tmp/jobfiller/outputs/\cover_letters\\candidate-cover-letter-${job.company.toLowerCase()}.md`;
+  job.latest_cover_letter_path = `/tmp/jobfiller/outputs/\cover_letters\\candidate-cover-letter-${job.company.toLowerCase()}.docx`;
   job.artifact_count = Math.max(job.artifact_count, 1);
   job.status = "QA";
   job.updated_at = new Date().toISOString();
@@ -520,6 +534,30 @@ async function click(page, testId) {
   await page.getByTestId(testId).click();
 }
 
+async function chooseSelect(page, testId, value) {
+  const control = page.getByTestId(testId);
+  const tagName = await control.evaluate((element) => element.tagName.toLowerCase());
+  if (tagName === "select") {
+    await control.selectOption(String(value));
+    return;
+  }
+  await control.locator("button").first().click();
+  await page.getByTestId(`${testId}-option-${value}`).click();
+}
+
+async function expectSelectValue(page, testId, expectedValue) {
+  const control = page.getByTestId(testId);
+  const tagName = await control.evaluate((element) => element.tagName.toLowerCase());
+  const actual = tagName === "select" ? await control.inputValue() : await control.getAttribute("data-value");
+  if (actual !== String(expectedValue)) {
+    throw new Error(`Expected ${testId} value ${expectedValue}, got ${actual}`);
+  }
+}
+
+async function expectFirstJobRowContains(page, expectedText) {
+  await page.waitForFunction((value) => document.querySelector(".jobLine")?.innerText.includes(value), expectedText, { timeout: 5000 });
+}
+
 async function assertSrsAccessibility(page, label) {
   const result = await page.evaluate(() => {
     function isVisible(el) {
@@ -606,6 +644,7 @@ async function main() {
       viewport: { width: 1440, height: 950 },
       permissions: ["clipboard-read", "clipboard-write"],
     });
+    await mockExternalLogoRequests(context);
     await context.route("**/api/**", handleApi);
     const page = await context.newPage();
     page.on("console", (message) => {
@@ -631,7 +670,7 @@ async function main() {
     await click(page, "health-pill-scanner");
     await expectText(page, "Runs & Logs");
     await click(page, "health-pill-worker");
-    await expectText(page, "Generate Queue");
+    await expectText(page, "Auto Generate");
     await page.getByRole("button", { name: /Local LLM:/ }).click();
     await expectText(page, "Model Health");
     await click(page, "command-open-settings");
@@ -647,7 +686,7 @@ async function main() {
       ["nav-tomorrow", "Apply Queue"],
       ["nav-facts", "Profile Facts"],
       ["nav-runs", "Runs & Logs"],
-      ["nav-reprocess", "Generate Queue"],
+      ["nav-reprocess", "Auto Generate"],
       ["nav-agent", "Agent Import / MCP"],
       ["nav-assist", "Assist Upload"],
       ["nav-export", "Export Workbook"],
@@ -661,11 +700,11 @@ async function main() {
     await click(page, "nav-jobs");
     await page.getByTestId("jobs-search").fill("Brex");
     await expectText(page, "Brex");
-    await page.getByTestId("jobs-filter-status").selectOption("NEEDS_INFO");
-    await expectText(page, "NEEDS_INFO");
-    await page.getByTestId("jobs-filter-source").selectOption("manual");
-    await page.getByTestId("jobs-filter-work-model").selectOption("Remote");
-    await page.getByTestId("jobs-sort").selectOption("fit");
+    await chooseSelect(page, "jobs-filter-status", "Action Needed");
+    await expectText(page, "Action Needed");
+    await chooseSelect(page, "jobs-filter-source", "manual");
+    await chooseSelect(page, "jobs-filter-work-model", "Remote");
+    await chooseSelect(page, "jobs-sort", "fit");
     await click(page, "jobs-advanced-toggle");
     await expectText(page, "Remote-first ranking");
     await click(page, "advanced-clear-filters");
@@ -676,11 +715,35 @@ async function main() {
     await click(page, "location-clear");
     await click(page, "location-apply");
 
+    for (const [testId, firstSort, secondSort] of [
+      ["jobs-sort-posted", "newest", "oldest"],
+      ["jobs-sort-imported", "imported", "imported-oldest"],
+      ["jobs-sort-company", "company", "company-desc"],
+      ["jobs-sort-role", "role", "role-desc"],
+      ["jobs-sort-location", "location", "location-desc"],
+      ["jobs-sort-status", "status", "status-desc"],
+      ["jobs-sort-fit", "fit", "fit-low"],
+      ["jobs-sort-grade", "grade", "grade-low"],
+      ["jobs-sort-ready", "ready", "ready-low"],
+      ["jobs-sort-artifacts", "artifacts", "artifacts-low"],
+    ]) {
+      await click(page, testId);
+      await expectSelectValue(page, "jobs-sort", firstSort);
+      await click(page, testId);
+      await expectSelectValue(page, "jobs-sort", secondSort);
+    }
+    await click(page, "jobs-sort-company");
+    await expectSelectValue(page, "jobs-sort", "company");
+    await expectFirstJobRowContains(page, "Amex");
+    await click(page, "jobs-sort-company");
+    await expectSelectValue(page, "jobs-sort", "company-desc");
+    await expectFirstJobRowContains(page, "StubHub");
+
     await click(page, "jobs-page-next");
     await expectText(page, "11-13 of");
     await click(page, "jobs-page-prev");
     await expectText(page, "1-10 of");
-    await page.getByTestId("jobs-page-size").selectOption("20");
+    await chooseSelect(page, "jobs-page-size", "20");
     await expectText(page, "1-13 of");
 
     await click(page, "jobs-row-select-1");
@@ -691,23 +754,23 @@ async function main() {
     await expectText(page, "Brex");
     await expectVisible(page, '[data-testid="inspector-apply-2"]', "inspector apply link");
 
-    await page.getByTestId("dashboard-question-sort").selectOption("recent");
+    await chooseSelect(page, "dashboard-question-sort", "recent");
     await click(page, "question-open-list");
     await expectText(page, "Questions");
     await page.getByTestId("questions-search").fill("finance");
     await expectText(page, "financial data");
-    await page.getByTestId("questions-status-filter").selectOption("OPEN");
-    await page.getByTestId("questions-tag-filter").selectOption("finance_motivation");
-    await page.getByTestId("questions-sort").selectOption("impact");
+    await chooseSelect(page, "questions-status-filter", "OPEN");
+    await chooseSelect(page, "questions-tag-filter", "finance_motivation");
+    await chooseSelect(page, "questions-sort", "impact");
     await page.getByTestId("question-answer-201").fill("I have worked with payment-like validation and finance-oriented workflow data.");
     await click(page, "question-save-201");
     await expectText(page, "Saved answer");
     await page.getByTestId("questions-search").fill("");
-    await page.getByTestId("questions-status-filter").selectOption("OPEN");
-    await page.getByTestId("questions-tag-filter").selectOption("all");
+    await chooseSelect(page, "questions-status-filter", "OPEN");
+    await chooseSelect(page, "questions-tag-filter", "all");
     await click(page, "question-skip-202");
     await expectText(page, "Question skipped");
-    await page.getByTestId("questions-status-filter").selectOption("all");
+    await chooseSelect(page, "questions-status-filter", "all");
     await click(page, "question-open-201");
     await expectText(page, "Backend Engineer 2");
 

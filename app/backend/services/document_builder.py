@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import textwrap
+import zipfile
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 from ..settings import candidate_profile
 from ..models import Job
@@ -174,8 +176,30 @@ def _job_keywords(job: Job) -> list[str]:
     return split_list(job.keywords) or split_list(job.key_requirements)[:6]
 
 
+def _keyword_terms(job: Job) -> list[str]:
+    terms: list[str] = []
+    for item in [*_job_keywords(job), *split_list(job.key_requirements), str(job.title or ""), str(job.role_family or "")]:
+        for term in str(item).replace("/", " ").replace("-", " ").split():
+            clean = term.strip(" ,.;:()[]{}").lower()
+            if len(clean) > 2 and clean not in terms:
+                terms.append(clean)
+    return terms
+
+
+def _prioritized_texts(items: list[str], job: Job, limit: int) -> list[str]:
+    terms = _keyword_terms(job)
+    indexed = list(enumerate(item for item in items if str(item).strip()))
+
+    def score(entry: tuple[int, str]) -> tuple[int, int]:
+        index, text = entry
+        lower = text.lower()
+        return (sum(1 for term in terms if term in lower), -index)
+
+    return [text for _, text in sorted(indexed, key=score, reverse=True)[:limit]]
+
+
 def _prioritized_projects(profile: dict[str, Any], job: Job) -> list[dict[str, Any]]:
-    keywords = " ".join(_job_keywords(job)).lower()
+    keywords = " ".join(_keyword_terms(job)).lower()
     projects = list(_projects(profile))
 
     def score(project: dict[str, Any]) -> int:
@@ -189,7 +213,83 @@ def _prioritized_projects(profile: dict[str, Any], job: Job) -> list[dict[str, A
         ).lower()
         return sum(1 for keyword in keywords.split() if len(keyword) > 2 and keyword in text)
 
-    return sorted(projects, key=score, reverse=True)[:3]
+    return sorted(projects, key=score, reverse=True)[:2]
+
+
+def _project_technologies(project: dict[str, Any]) -> list[str]:
+    return split_list(project.get("skills"))[:8]
+
+
+def _source_cover_letter(profile: dict[str, Any]) -> str:
+    for key in ("cover_letter", "cover_letter_sample", "base_cover_letter", "source_cover_letter"):
+        value = str(profile.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _profile_prompt_summary(profile: dict[str, Any]) -> str:
+    parts = [
+        f"Name: {profile.get('name') or ''}",
+        f"Summary: {profile.get('summary') or ''}",
+        f"Skills: {', '.join(split_list(profile.get('skills'))[:28])}",
+    ]
+    experience = []
+    for item in _experience(profile)[:4]:
+        label = ", ".join(str(item.get(key) or "").strip() for key in ("title", "company") if str(item.get(key) or "").strip())
+        bullets = "; ".join(str(bullet).strip() for bullet in (item.get("bullets") or [])[:4] if str(bullet).strip())
+        if label or bullets:
+            experience.append(f"{label}: {bullets}".strip(": "))
+    projects = []
+    for project in _projects(profile)[:4]:
+        label = str(project.get("name") or "").strip()
+        description = str(project.get("description") or "").strip()
+        bullets = "; ".join(str(bullet).strip() for bullet in (project.get("bullets") or [])[:3] if str(bullet).strip())
+        if label or description or bullets:
+            projects.append(f"{label}: {description} {bullets}".strip(": "))
+    if experience:
+        parts.append("Experience: " + " | ".join(experience))
+    if projects:
+        parts.append("Projects: " + " | ".join(projects))
+    return "\n".join(part for part in parts if part.strip())
+
+
+def build_cover_letter_prompt(job: Job, fallback_draft: str) -> str:
+    profile = _profile()
+    source_cover_letter = _source_cover_letter(profile)
+    return textwrap.dedent(
+        f"""\
+        You are an expert cover letter writer tailoring a cover letter for a real job application.
+
+        Rules:
+        - Use the user's own cover letter as the authoritative source for voice, structure, and personal information.
+        - Preserve the information from the user's own cover letter unless it is clearly irrelevant to this job.
+        - Make only the edits necessary to align the letter with this company, role, and requirements.
+        - Do not invent employment, projects, metrics, credentials, location preferences, work authorization, or company facts.
+        - Keep the result direct, human, and specific. Avoid over-polished sales language.
+        - Return only the final cover letter text, with normal paragraphs and no Markdown.
+
+        Job:
+        Company: {job.company or ""}
+        Role: {job.title or ""}
+        Requirements: {job.key_requirements or ""}
+        Keywords: {job.keywords or ""}
+        Role family: {job.role_family or ""}
+
+        Candidate facts:
+        {_profile_prompt_summary(profile)}
+
+        User's own cover letter:
+        ---
+        {source_cover_letter or "No source cover letter has been configured. Use the candidate facts and fallback draft without inventing details."}
+        ---
+
+        Fallback draft to edit if useful:
+        ---
+        {fallback_draft.strip()}
+        ---
+        """
+    ).strip()
 
 
 def _itemize(items: list[str] | tuple[str, ...]) -> str:
@@ -202,15 +302,79 @@ def _heading_line(left: str, right: str = "") -> str:
     return rf"\begin{{onecolentry}}\textbf{{{escape_tex(left)}}}\end{{onecolentry}}"
 
 
+def _lower_first(value: str) -> str:
+    value = value.strip()
+    return value[:1].lower() + value[1:] if value else value
+
+
+def _sentence_body(value: str) -> str:
+    return value.strip().rstrip(".")
+
+
+def _article_for(value: str) -> str:
+    first = value.strip()[:1].lower()
+    return "an" if first in {"a", "e", "i", "o", "u"} else "a"
+
+
+def _href_contact(kind: str, value: str) -> str:
+    value = value.strip()
+    if kind == "email":
+        href = f"mailto:{value}"
+        return rf"\mbox{{\hrefWithoutArrow{{{escape_tex(href)}}}{{{escape_tex(value)}}}}}%"
+    if kind == "phone":
+        tel = "".join(ch for ch in value if ch.isdigit() or ch == "+")
+        href = f"tel:{tel}" if tel else value
+        return rf"\mbox{{\hrefWithoutArrow{{{escape_tex(href)}}}{{{escape_tex(value)}}}}}%"
+    if kind in {"website", "linkedin"}:
+        href = value if value.startswith(("http://", "https://")) else f"https://{value}"
+        return rf"\mbox{{\hrefWithoutArrow{{{escape_tex(href)}}}{{{escape_tex(value)}}}}}%"
+    return rf"\mbox{{{escape_tex(value)}}}%"
+
+
+def _contact_line(profile: dict[str, Any]) -> str:
+    entries: list[str] = []
+    for key in ["location", "email", "phone", "website", "linkedin"]:
+        value = str(profile.get(key) or "").strip()
+        if value:
+            entries.append(_href_contact(key, value))
+    if not entries:
+        entries.append(r"\mbox{Add contact information in Settings}%")
+    separator = "\n        \\kern 5.0 pt%\n        \\AND%\n        \\kern 5.0 pt%\n        "
+    return "        " + separator.join(entries)
+
+
+def _project_block(project: dict[str, Any], job: Job) -> str:
+    name_text = str(project.get("name") or "Project").strip()
+    description = str(project.get("description") or "").strip()
+    bullets = [str(bullet) for bullet in project.get("bullets") or [] if str(bullet).strip()]
+    if not bullets:
+        bullets = ["Add concise, truthful technical bullets for this project."]
+    technologies = _project_technologies(project)
+    tech_line = (
+        "\n" + rf"\textbf{{Technologies:}} {escape_tex(', '.join(technologies))}"
+        if technologies
+        else ""
+    )
+    return "\n".join(
+        [
+            _heading_line(name_text),
+            "",
+            r"\vspace{0.16 cm}",
+            r"\begin{onecolentry}",
+            escape_tex(description) if description else "",
+            r"\begin{highlights}",
+            _itemize(_prioritized_texts(bullets, job, 3)),
+            r"\end{highlights}",
+            tech_line,
+            r"\end{onecolentry}",
+        ]
+    )
+
+
 def build_tex(job: Job) -> str:
     profile = _profile()
     name = str(profile.get("name") or "Your Name").strip()
-    contact_parts = _contact_parts(profile)
-    contact_line = "    \\AND%\n    ".join(rf"\mbox{{{escape_tex(part)}}}%" for part in contact_parts)
-    if contact_line:
-        contact_line = f"    {contact_line}"
-    else:
-        contact_line = r"    \mbox{Add contact information in Settings}%"
+    contact_line = _contact_line(profile)
 
     education_blocks = []
     for item in _education(profile):
@@ -237,63 +401,57 @@ def build_tex(job: Job) -> str:
             "\n".join(
                 [
                     _heading_line(f"{label}{suffix}", dates),
+                    "",
+                    r"\vspace{0.10 cm}",
                     r"\begin{onecolentry}",
                     r"\begin{highlights}",
-                    _itemize(bullets[:4]),
+                    _itemize(_prioritized_texts(bullets, job, 3)),
                     r"\end{highlights}",
                     r"\end{onecolentry}",
                 ]
             )
         )
 
-    project_blocks = []
-    for project in _prioritized_projects(profile, job):
-        name_text = str(project.get("name") or "Project").strip()
-        description = str(project.get("description") or "").strip()
-        bullets = [str(bullet) for bullet in project.get("bullets") or [] if str(bullet).strip()]
-        if not bullets:
-            bullets = ["Add concise, truthful technical bullets for this project."]
-        project_blocks.append(
-            "\n".join(
-                [
-                    _heading_line(name_text),
-                    r"\begin{onecolentry}",
-                    escape_tex(description) if description else "",
-                    r"\begin{highlights}",
-                    _itemize(bullets[:4]),
-                    r"\end{highlights}",
-                    r"\end{onecolentry}",
-                ]
-            )
-        )
-
-    skills = ", ".join(_skills(profile, job))
-    skills_block = (
-        "\n".join([r"\section{Skills}", r"\begin{onecolentry}", escape_tex(skills), r"\end{onecolentry}"])
-        if skills
-        else ""
-    )
+    project_blocks = [_project_block(project, job) for project in _prioritized_projects(profile, job)]
 
     return rf"""\documentclass[10pt, letterpaper]{{article}}
-\usepackage[ignoreheadfoot,top=1.25cm,bottom=1.25cm,left=1.35cm,right=1.35cm,footskip=0.6cm]{{geometry}}
+
+% Packages:
+\usepackage[
+    ignoreheadfoot,
+    top=2 cm,
+    bottom=2 cm,
+    left=2 cm,
+    right=2 cm,
+    footskip=1.0 cm,
+]{{geometry}}
 \usepackage{{titlesec}}
 \usepackage{{tabularx}}
 \usepackage{{array}}
 \usepackage[dvipsnames]{{xcolor}}
-\definecolor{{primaryColor}}{{RGB}}{{0,0,0}}
+\definecolor{{primaryColor}}{{RGB}}{{0, 0, 0}}
 \usepackage{{enumitem}}
+\usepackage{{fontawesome5}}
+\usepackage{{amsmath}}
 \usepackage[
-    pdftitle={{{escape_tex(name)} Resume - {escape_tex(job.company)}}},
+    pdftitle={{{escape_tex(name)}'s CV}},
     pdfauthor={{{escape_tex(name)}}},
-    pdfcreator={{JobFiller}},
+    pdfcreator={{LaTeX with RenderCV}},
     colorlinks=true,
     urlcolor=primaryColor
 ]{{hyperref}}
+\usepackage[pscoord]{{eso-pic}}
+\usepackage{{calc}}
 \usepackage{{bookmark}}
+\usepackage{{lastpage}}
 \usepackage{{changepage}}
+\usepackage{{etoolbox}}
 \usepackage{{paracol}}
+\usepackage{{ifthen}}
 \usepackage{{needspace}}
 \usepackage{{iftex}}
+
+% Ensure that generated PDF is machine readable/ATS parsable:
 \ifPDFTeX
     \input{{glyphtounicode}}
     \pdfgentounicode=1
@@ -301,8 +459,12 @@ def build_tex(job: Job) -> str:
     \usepackage[utf8]{{inputenc}}
     \usepackage{{lmodern}}
 \fi
+
 \usepackage{{charter}}
+
+% Some settings:
 \raggedright
+\AtBeginEnvironment{{adjustwidth}}{{\partopsep0pt}}
 \pagestyle{{empty}}
 \setcounter{{secnumdepth}}{{0}}
 \setlength{{\parindent}}{{0pt}}
@@ -310,21 +472,89 @@ def build_tex(job: Job) -> str:
 \setlength{{\columnsep}}{{0.15cm}}
 \pagenumbering{{gobble}}
 \titleformat{{\section}}{{\needspace{{4\baselineskip}}\bfseries\large}}{{}}{{0pt}}{{}}[\vspace{{1pt}}\titlerule]
-\titlespacing{{\section}}{{-1pt}}{{0.3cm}}{{0.2cm}}
+\titlespacing{{\section}}{{-1pt}}{{0.3 cm}}{{0.2 cm}}
 \renewcommand\labelitemi{{$\vcenter{{\hbox{{\small$\bullet$}}}}$}}
-\newenvironment{{highlights}}{{\begin{{itemize}}[topsep=0.10cm,parsep=0.10cm,partopsep=0pt,itemsep=0pt,leftmargin=0cm + 10pt]}}{{\end{{itemize}}}}
-\newenvironment{{onecolentry}}{{\begin{{adjustwidth}}{{0cm}}{{0cm}}}}{{\end{{adjustwidth}}}}
-\newenvironment{{twocolentry}}[2][]{{\onecolentry\def\secondColumn{{#2}}\setcolumnwidth{{\fill,4.5cm}}\begin{{paracol}}{{2}}}}{{\switchcolumn\raggedleft\secondColumn\end{{paracol}}\endonecolentry}}
-\newcommand{{\AND}}{{\unskip\cleaders\hbox{{$|$}}\hskip 1.1em\ignorespaces}}
-\begin{{document}}
-\begin{{center}}
-    \fontsize{{25pt}}{{25pt}}\selectfont {escape_tex(name)}
+\newenvironment{{highlights}}{{
+    \begin{{itemize}}[
+        topsep=0.10 cm,
+        parsep=0.10 cm,
+        partopsep=0pt,
+        itemsep=0pt,
+        leftmargin=0 cm + 10pt
+    ]
+}}{{
+    \end{{itemize}}
+}}
+\newenvironment{{highlightsforbulletentries}}{{
+    \begin{{itemize}}[
+        topsep=0.10 cm,
+        parsep=0.10 cm,
+        partopsep=0pt,
+        itemsep=0pt,
+        leftmargin=10pt
+    ]
+}}{{
+    \end{{itemize}}
+}}
+\newenvironment{{onecolentry}}{{
+    \begin{{adjustwidth}}{{0 cm + 0.00001 cm}}{{0 cm + 0.00001 cm}}
+}}{{
+    \end{{adjustwidth}}
+}}
+\newenvironment{{twocolentry}}[2][]{{\onecolentry
+    \def\secondColumn{{#2}}
+    \setcolumnwidth{{\fill, 4.5 cm}}
+    \begin{{paracol}}{{2}}
+}}{{
+    \switchcolumn \raggedleft \secondColumn
+    \end{{paracol}}
+    \endonecolentry
+}}
+\newenvironment{{threecolentry}}[3][]{{\onecolentry
+    \def\thirdColumn{{#3}}
+    \setcolumnwidth{{, \fill, 4.5 cm}}
+    \begin{{paracol}}{{3}}
+    {{\raggedright #2}} \switchcolumn
+}}{{
+    \switchcolumn \raggedleft \thirdColumn
+    \end{{paracol}}
+    \endonecolentry
+}}
+\newenvironment{{header}}{{
+    \setlength{{\topsep}}{{0pt}}\par\kern\topsep\centering\linespread{{1.5}}
+}}{{
+    \par\kern\topsep
+}}
+\newcommand{{\placelastupdatedtext}}{{%
+  \AddToShipoutPictureFG*{{%
+    \put(
+        \LenToUnit{{\paperwidth-2 cm-0 cm+0.05cm}},
+        \LenToUnit{{\paperheight-1.0 cm}}
+    ){{\vtop{{{{\null}}\makebox[0pt][c]{{%
+        \small\color{{gray}}\textit{{Last updated in April 2026}}\hspace{{\widthof{{Last updated in April 2026}}}}
+    }}}}}}%
+  }}%
+}}%
+\let\hrefWithoutArrow\href
 
-    \vspace{{5pt}}
-    \normalsize
+\begin{{document}}
+    \newcommand{{\AND}}{{\unskip
+        \cleaders\copy\ANDbox\hskip\wd\ANDbox
+        \ignorespaces
+    }}
+    \newsavebox\ANDbox
+    \sbox\ANDbox{{$|$}}
+
+    \begin{{header}}
+        \fontsize{{25 pt}}{{25 pt}}\selectfont {escape_tex(name)}
+
+        \vspace{{5 pt}}
+
+        \normalsize
 {contact_line}
-\end{{center}}
-\vspace{{5pt - 0.3cm}}
+    \end{{header}}
+
+    \vspace{{5 pt - 0.3 cm}}
 
 \section{{Education}}
 {chr(10).join(education_blocks)}
@@ -335,8 +565,6 @@ def build_tex(job: Job) -> str:
 \section{{Projects}}
 {chr(10).join(project_blocks)}
 
-{skills_block}
-
 \end{{document}}
 """
 
@@ -345,34 +573,116 @@ def make_cover_letter(job: Job) -> str:
     profile = _profile()
     name = str(profile.get("name") or "Your Name").strip()
     email = str(profile.get("email") or "add-your-email-in-settings").strip()
-    summary = str(profile.get("summary") or "").strip()
+    phone = str(profile.get("phone") or "").strip()
+    website = str(profile.get("website") or "").strip()
     strongest_project = _prioritized_projects(profile, job)[0]
     project_name = str(strongest_project.get("name") or "my strongest relevant project")
     project_description = str(strongest_project.get("description") or "a project configured in my candidate profile")
-    requirements = ", ".join(split_list(job.key_requirements)[:3] or [job.title])
-    keywords = ", ".join(_job_keywords(job)[:5])
-    if not summary:
-        summary = "I am configuring JobFiller with my own background, source resume, and profile facts so each application packet stays grounded in verified experience."
+    project_bullets = [str(item) for item in strongest_project.get("bullets") or [] if str(item).strip()]
+    project_proof = _prioritized_texts(project_bullets, job, 1)
+    experience = _experience(profile)
+    experience_proof = ""
+    if experience:
+        selected_experience = experience[0]
+        exp_bullets = [str(item) for item in selected_experience.get("bullets") or [] if str(item).strip()]
+        selected_bullets = _prioritized_texts(exp_bullets, job, 1)
+        if selected_bullets:
+            title = str(selected_experience.get("title") or "").strip()
+            company = str(selected_experience.get("company") or "").strip()
+            label = " at ".join(part for part in [title, company] if part) or "my prior experience"
+            experience_proof = f"As {label}, I {selected_bullets[0][0].lower() + selected_bullets[0][1:]}"
+    requirements = split_list(job.key_requirements)[:3] or split_list(job.keywords)[:3] or [str(job.title or "the role")]
+    requirement_phrase = ", ".join(requirements)
+    keywords = ", ".join(_job_keywords(job)[:4])
+    contact = " | ".join(part for part in [email, phone, website] if part)
+    project_body = _lower_first(_sentence_body(project_description))
+    if project_body:
+        needs_article = not project_body.startswith(("a ", "an ", "the ", "my "))
+        article = f"{_article_for(project_body)} " if needs_article else ""
+        project_sentence = f"{project_name} is {article}{project_body}."
+    else:
+        project_sentence = f"In {project_name}, I focused on the kind of technical execution this role needs."
+    if project_proof:
+        project_sentence += f" I also {_lower_first(project_proof[0])}"
+    experience_sentence = experience_proof or (
+        "My prior work has centered on evaluating technical quality, documenting edge cases, and building reliable workflows from real requirements."
+    )
 
     return textwrap.dedent(
         f"""\
         {name}
-        {email}
+        {contact}
 
-        Dear {job.company or "Hiring"} Team,
+        Dear {job.company or "Hiring"} Hiring Team,
 
-        I am interested in the {job.title or "open"} role. The posting emphasizes {requirements}, and I am using JobFiller to prepare a tailored application packet grounded in my configured profile facts and source materials.
+        I am applying for the {job.title or "open role"} role at {job.company or "your team"} because it lines up with the kind of engineering work I want to keep doing: backend services, product-facing systems, and careful technical execution. The posting emphasizes requirements like {requirement_phrase}, and my strongest experience is in building and evaluating systems where reliability, maintainability, and clear data flow matter.
 
-        {summary}
+        {project_sentence} That work is especially relevant to a role focused on {keywords or "the listed technical requirements"} because it gave me practical experience turning messy inputs into structured, testable workflows.
 
-        One relevant example is {project_name}: {project_description} This maps naturally to the role's focus on {keywords or "the listed requirements"}. I have kept this draft concise so it can be reviewed and adjusted before submission.
+        {experience_sentence} I have also worked across Python, Java, JavaScript, React, TypeScript, testing, analytics migration, and compliance-sensitive web workflows, so I am comfortable learning a codebase while still paying attention to the details that keep software usable in production.
 
-        I would be glad to bring this background to {job.company or "your team"} and continue the conversation.
+        I would be glad to bring that mix of backend focus, AI/product experience, and careful implementation judgment to {job.company or "your team"}.
 
         Sincerely,
         {name}
         """
     ).strip() + "\n"
+
+
+def _docx_paragraph_xml(text: str) -> str:
+    from xml.sax.saxutils import escape
+
+    if not text:
+        return "<w:p/>"
+    escaped = escape(text)
+    return f'<w:p><w:r><w:t xml:space="preserve">{escaped}</w:t></w:r></w:p>'
+
+
+def write_cover_letter_docx(path: Path, text: str) -> None:
+    paragraphs = text.strip().splitlines()
+    document = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        + "".join(_docx_paragraph_xml(line.strip()) for line in paragraphs)
+        + '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" '
+        'w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>'
+        "</w:body></w:document>"
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="word/document.xml"/>'
+        "</Relationships>"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", rels)
+        archive.writestr("word/document.xml", document)
+
+
+def read_cover_letter_docx(path: Path) -> str:
+    with zipfile.ZipFile(path) as archive:
+        document = archive.read("word/document.xml")
+    root = ElementTree.fromstring(document)
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    paragraphs: list[str] = []
+    for paragraph in root.findall(".//w:p", ns):
+        texts = [node.text or "" for node in paragraph.findall(".//w:t", ns)]
+        paragraphs.append("".join(texts))
+    return "\n".join(paragraphs).strip() + "\n"
 
 
 def draw_wrapped(c: SimplePdfCanvas, text: str, x: float, y: float, chars: int, size: float = 8.2, leading: float = 9.1) -> float:
@@ -433,7 +743,7 @@ def build_pdf(job: Job, pdf_path: Path) -> None:
         c.setFont("Helvetica", 8.3)
         c.drawRightString(width - right, y, str(item.get("dates") or ""))
         y -= 10
-        for text in [str(bullet_text) for bullet_text in item.get("bullets") or []][:4]:
+        for text in [str(bullet_text) for bullet_text in item.get("bullets") or []][:3]:
             bullet(text)
 
     section("Projects")
@@ -442,12 +752,9 @@ def build_pdf(job: Job, pdf_path: Path) -> None:
         c.drawString(left, y, str(project.get("name") or "Project"))
         y -= 9
         y = draw_wrapped(c, str(project.get("description") or ""), left, y, 126, 8.1, 9)
-        for text in [str(bullet_text) for bullet_text in project.get("bullets") or []][:4]:
+        for text in [str(bullet_text) for bullet_text in project.get("bullets") or []][:3]:
             bullet(text)
         y -= 6
 
     skills = ", ".join(_skills(profile, job))
-    if skills and y > 80:
-        section("Skills")
-        y = draw_wrapped(c, skills, left, y, 126, 8.2, 9)
     c.save()

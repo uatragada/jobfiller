@@ -109,3 +109,30 @@ def test_source_tree_does_not_embed_static_credentials() -> None:
             assert not re.search(pattern, text, flags=re.IGNORECASE), f"{pattern} found in {file_path}"
 
     assert scanned_files > 0
+
+
+def test_frontend_fixtures_and_dist_do_not_ship_private_application_history() -> None:
+    scan_roots = [
+        Path("app/frontend/src/data/fixtures"),
+        Path("app/frontend/dist"),
+    ]
+    private_application_markers = [
+        "Real Candidate Company",
+        "mail.google.com",
+        "myworkday",
+        "personal application inbox",
+    ]
+
+    scanned_files = 0
+    for root in scan_roots:
+        if not root.exists():
+            continue
+        for file_path in root.rglob("*"):
+            if file_path.suffix.lower() not in {".js", ".jsx", ".ts", ".tsx", ".html", ".css", ".json"}:
+                continue
+            scanned_files += 1
+            text = file_path.read_text(encoding="utf-8", errors="ignore")
+            for marker in private_application_markers:
+                assert marker.lower() not in text.lower(), f"{marker} found in {file_path}"
+
+    assert scanned_files > 0

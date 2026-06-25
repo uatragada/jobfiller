@@ -21,6 +21,11 @@ manual review.
 
 ## Codex Prompt
 
+The dashboard Scan Now action can create the current prompt at
+`outputs/codex_scan_prompt.txt`. Use that file when available; it includes the
+latest scan keywords, location preference, limit, and relevant job-site search
+URLs.
+
 ```text
 Use the local JobFiller MCP server.
 
@@ -29,10 +34,11 @@ first. Do not apply, save jobs, message recruiters, upload files, or click final
 submit buttons.
 
 For each promising posting, export a structured job record to JobFiller using
-export_jobs_to_jobfiller with process=false. Include URL, apply_url when known,
-company, title, location, work_model, role_family, key_requirements, keywords,
-posting_age_text, salary when listed, materials, manual_questions, and concise
-notes. Reject or skip unsafe/non-public URLs.
+export_jobs_to_jobfiller. JobFiller queues missing questions and automatically
+generates packets for jobs that are not blocked. Include URL, apply_url when
+known, company, title, location, work_model, role_family, key_requirements,
+keywords, posting_age_text, salary when listed, materials, manual_questions,
+and concise notes. Reject or skip unsafe/non-public URLs.
 
 After exporting, summarize what was sent and any postings that were skipped.
 ```
@@ -46,9 +52,10 @@ Scan newest relevant job postings first from the sources I provide or from my
 browser context. Import only structured job records into JobFiller. Do not apply
 or submit anything.
 
-Call export_jobs_to_jobfiller with process=false unless I explicitly ask you to
-generate packets immediately. Include raw_text only when it is useful and keep it
-under the import limit.
+Call export_jobs_to_jobfiller for discovered jobs. Imported manual_questions and
+detected missing facts are added to the question queue; unblocked jobs generate
+packets automatically. Include raw_text only when it is useful and keep it under
+the import limit.
 
 When done, tell me how many jobs were exported and what questions I should answer
 inside JobFiller.

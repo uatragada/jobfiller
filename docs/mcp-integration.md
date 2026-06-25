@@ -88,7 +88,7 @@ Use `export_jobs_to_jobfiller` with this shape:
 ```json
 {
   "source": "codex",
-  "process": false,
+  "process": true,
   "jobs": [
     {
       "url": "https://example.com/jobs/backend-software-engineer",
@@ -106,7 +106,7 @@ Use `export_jobs_to_jobfiller` with this shape:
 }
 ```
 
-Row-level import errors are returned by JobFiller and are not hidden by the MCP bridge. Set `process` to `true` only when you want the app to immediately run missing-information checks and generate artifacts for the batch.
+Row-level import errors are returned by JobFiller and are not hidden by the MCP bridge. JobFiller automatically runs missing-information checks and generates artifacts for imported jobs that are not blocked.
 
 `materials`, `manual_questions`, and `raw_text` are text fields. The MCP bridge does not upload arbitrary files or externally generated PDFs; JobFiller creates and manages local resume and cover-letter artifacts after the job record is imported.
 

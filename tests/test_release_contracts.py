@@ -97,7 +97,8 @@ def test_default_runtime_dependencies_stay_lean() -> None:
     assert "reportlab" not in runtime_requirements
     assert "openpyxl" not in runtime_requirements
     assert "pytest==9.1.1" in dev_requirements
-    assert "httpx2==2.4.0" in dev_requirements
+    assert "httpx==0.28.1" in dev_requirements
+    assert "httpx2" not in dev_requirements
     assert "pdfplumber==0.11.10" in optional_requirements
 
 
@@ -147,7 +148,7 @@ def test_clone_readiness_docs_and_examples_cover_agent_imports() -> None:
     assert "SECURITY.md" in readme
     assert "export_jobs_to_jobfiller" in workflow_doc
     assert "Do not apply" in workflow_doc
-    assert '"process": false' in sample
+    assert '"process": true' in sample
     mcp_doc = Path("docs/mcp-integration.md").read_text(encoding="utf-8")
     assert "python scripts/smoke_mcp.py --live-export" in mcp_doc
     assert "materials`, `manual_questions`, and `raw_text` are text fields" in mcp_doc

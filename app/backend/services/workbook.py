@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Job
 from ..settings import OUTPUT_ROOT
+from .document_builder import read_cover_letter_docx
 from .processor import latest_artifact, latest_grade
 from .time_utils import scan_sort_key
 
@@ -30,6 +31,11 @@ WIDTHS = {
     "Materials Needed": 40,
     "Source URL": 52,
     "Apply URL": 52,
+    "Pipeline State": 18,
+    "Follow-Up Action": 70,
+    "Last Status Email": 56,
+    "Last Status Email At": 24,
+    "Last Status Email URL": 52,
     "Resume PDF Path": 58,
     "Resume LaTeX Path": 58,
     "Cover Letter Path": 58,
@@ -39,6 +45,17 @@ WIDTHS = {
     "Action": 56,
     "Files": 60,
 }
+
+
+def _read_cover_letter_export_text(path: str) -> str:
+    if not path:
+        return ""
+    cover_path = Path(path)
+    if not cover_path.exists():
+        return ""
+    if cover_path.suffix.lower() == ".docx":
+        return read_cover_letter_docx(cover_path)
+    return cover_path.read_text(encoding="utf-8")
 
 
 def _column_name(index: int) -> str:
@@ -196,6 +213,7 @@ def export_current_workbook(db: Session, path: Path = WORKBOOK_PATH) -> Path:
     tailoring_rows = []
     cover_rows = []
     checklist_rows = []
+    follow_up_rows = []
 
     for index, job in enumerate(jobs, start=1):
         artifact = latest_artifact(job)
@@ -210,7 +228,7 @@ def export_current_workbook(db: Session, path: Path = WORKBOOK_PATH) -> Path:
         resume_pdf = artifact.resume_pdf_path if artifact else ""
         resume_tex = artifact.resume_tex_path if artifact else ""
         cover_path = artifact.cover_letter_path if artifact else ""
-        cover_text = Path(cover_path).read_text(encoding="utf-8") if cover_path and Path(cover_path).exists() else ""
+        cover_text = _read_cover_letter_export_text(cover_path)
         compile_status = artifact.compile_status if artifact else ""
 
         job_rows.append(
@@ -223,6 +241,11 @@ def export_current_workbook(db: Session, path: Path = WORKBOOK_PATH) -> Path:
                 job.source_url,
                 job.apply_url,
                 job.status,
+                job.application_state,
+                job.follow_up_action,
+                job.last_status_email_subject,
+                job.last_status_email_at.isoformat() if job.last_status_email_at else "",
+                job.last_status_email_url,
                 job.fit_score,
                 grade.overall_grade if grade else "",
                 "yes" if grade and grade.ready_to_send else "no",
@@ -259,11 +282,34 @@ def export_current_workbook(db: Session, path: Path = WORKBOOK_PATH) -> Path:
                 index,
                 job.company,
                 job.title,
-                "Open apply URL, confirm the role is still accepting applications, upload the tailored resume, and paste or attach the cover letter if requested.",
+                job.follow_up_action
+                or "Open apply URL, confirm the role is still accepting applications, upload the tailored resume, and paste or attach the cover letter if requested.",
                 f"{resume_pdf}\n{cover_path}",
-                "\n".join(open_questions) or "Review all required form fields manually, including work authorization and sponsorship.",
+                "\n".join(
+                    item
+                    for item in [
+                        "\n".join(open_questions),
+                        f"Latest status email: {job.last_status_email_subject}" if job.last_status_email_subject else "",
+                    ]
+                    if item
+                )
+                or "Review all required form fields manually, including work authorization and sponsorship.",
             ]
         )
+        if job.follow_up_action or job.application_state in {"ACTION_NEEDED", "INTERVIEW", "REJECTED"}:
+            follow_up_rows.append(
+                [
+                    index,
+                    job.company,
+                    job.title,
+                    job.application_state,
+                    job.follow_up_action,
+                    job.last_status_email_subject,
+                    job.last_status_email_at.isoformat() if job.last_status_email_at else "",
+                    job.last_status_email_url,
+                    job.apply_url,
+                ]
+            )
 
     sheets = [
         (
@@ -277,6 +323,11 @@ def export_current_workbook(db: Session, path: Path = WORKBOOK_PATH) -> Path:
             "Source URL",
             "Apply URL",
             "Status",
+            "Pipeline State",
+            "Follow-Up Action",
+            "Last Status Email",
+            "Last Status Email At",
+            "Last Status Email URL",
             "Fit Score",
             "Local LLM Grade",
             "Ready To Send",
@@ -288,6 +339,7 @@ def export_current_workbook(db: Session, path: Path = WORKBOOK_PATH) -> Path:
             "Resume LaTeX Path",
             "Cover Letter Path",
             "Manual Writing Questions",
+            "Open Questions",
             "Posting Age",
             "Posted At",
             "Compile Status",
@@ -302,6 +354,21 @@ def export_current_workbook(db: Session, path: Path = WORKBOOK_PATH) -> Path:
         ),
         ("Cover Letters", ["Apply Order", "Company", "Title", "Cover Letter Text", "Cover Letter Path"], cover_rows),
         ("Apply Queue", ["Apply Order", "Company", "Title", "Action", "Files", "Manual Checks"], checklist_rows),
+        (
+            "Follow Ups",
+            [
+                "Apply Order",
+                "Company",
+                "Title",
+                "Pipeline State",
+                "Follow-Up Action",
+                "Last Status Email",
+                "Last Status Email At",
+                "Last Status Email URL",
+                "Apply URL",
+            ],
+            follow_up_rows,
+        ),
     ]
 
     _write_xlsx(path, sheets)
@@ -325,6 +392,12 @@ def current_export_rows(db: Session) -> list[dict[str, object]]:
                 "source_url": job.source_url,
                 "apply_url": job.apply_url,
                 "status": job.status,
+                "application_state": job.application_state,
+                "follow_up_action": job.follow_up_action,
+                "follow_up_due_at": job.follow_up_due_at.isoformat() if job.follow_up_due_at else "",
+                "last_status_email_at": job.last_status_email_at.isoformat() if job.last_status_email_at else "",
+                "last_status_email_subject": job.last_status_email_subject,
+                "last_status_email_url": job.last_status_email_url,
                 "fit_score": job.fit_score,
                 "grade": grade.overall_grade if grade else "",
                 "ready_to_send": grade.ready_to_send if grade else False,
@@ -366,11 +439,11 @@ def build_tomorrow_checklist(db: Session) -> list[dict[str, object]]:
     checklist: list[dict[str, object]] = []
     for index, job in enumerate(ordered_jobs(db), start=1):
         artifact = latest_artifact(job)
-        if not artifact:
-            continue
         grade = latest_grade(job)
         open_questions = [q.question_text for q in job.questions if q.status == "OPEN"]
         manual_questions = list(dict.fromkeys(job.manual_questions.splitlines() if job.manual_questions else []))
+        if not artifact and not job.follow_up_action and not manual_questions and not open_questions:
+            continue
         manual_questions.extend(open_questions)
         checklist.append(
             {
@@ -379,6 +452,11 @@ def build_tomorrow_checklist(db: Session) -> list[dict[str, object]]:
                 "company": job.company,
                 "title": job.title,
                 "status": job.status,
+                "application_state": job.application_state,
+                "follow_up_action": job.follow_up_action,
+                "last_status_email_at": job.last_status_email_at.isoformat() if job.last_status_email_at else "",
+                "last_status_email_subject": job.last_status_email_subject,
+                "last_status_email_url": job.last_status_email_url,
                 "apply_url": job.apply_url,
                 "location": job.location,
                 "work_model": job.work_model,
@@ -387,9 +465,9 @@ def build_tomorrow_checklist(db: Session) -> list[dict[str, object]]:
                 "ready_to_send": grade.ready_to_send if grade else False,
                 "materials": job.materials,
                 "manual_questions": "\n".join(dict.fromkeys(manual_questions)),
-                "resume_pdf_path": artifact.resume_pdf_path,
-                "cover_letter_path": artifact.cover_letter_path,
-                "resume_tex_path": artifact.resume_tex_path,
+                "resume_pdf_path": artifact.resume_pdf_path if artifact else "",
+                "cover_letter_path": artifact.cover_letter_path if artifact else "",
+                "resume_tex_path": artifact.resume_tex_path if artifact else "",
                 "posting_age_text": job.posting_age_text,
                 "posted_at": job.posted_at.isoformat() if job.posted_at else "",
                 "first_seen_at": job.first_seen_at.isoformat(),

@@ -9,6 +9,10 @@ const thresholds = {
   filterMs: Number(process.env.JOBFILLER_PERF_FILTER_MS || 300),
   detailMs: Number(process.env.JOBFILLER_PERF_DETAIL_MS || 500),
 };
+const transparentLogoPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+  "base64",
+);
 
 const jobs = Array.from({ length: 1000 }, (_, index) => {
   const id = index + 1;
@@ -38,7 +42,7 @@ const jobs = Array.from({ length: 1000 }, (_, index) => {
     latest_grade: id % 7 === 0 ? "B+" : "A",
     ready_to_send: id % 7 !== 0,
     latest_resume_pdf_path: `/tmp/jobfiller/outputs/\resumes\\candidate-resume-company-${id}.pdf`,
-    latest_cover_letter_path: `/tmp/jobfiller/outputs/\cover_letters\\candidate-cover-letter-company-${id}.md`,
+    latest_cover_letter_path: `/tmp/jobfiller/outputs/\cover_letters\\candidate-cover-letter-company-${id}.docx`,
     latest_artifact_id: 1000 + id,
     artifact_count: 1,
     readiness_score: id % 7 === 0 ? 62 : 91,
@@ -128,6 +132,16 @@ async function handleApi(route) {
   return route.fulfill(json({ detail: `Unhandled mocked API route ${method} ${path}` }, 404));
 }
 
+async function mockExternalLogoRequests(context) {
+  await context.route("https://www.google.com/s2/favicons**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "image/png",
+      body: transparentLogoPng,
+    }),
+  );
+}
+
 async function main() {
   delete process.env.VITE_API_BASE;
   const viteServer = await createServer({
@@ -141,6 +155,7 @@ async function main() {
     const baseUrl = viteServer.resolvedUrls?.local?.[0] || `http://127.0.0.1:${PORT}/`;
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ viewport: { width: 1440, height: 950 } });
+    await mockExternalLogoRequests(context);
     await context.route("**/api/**", handleApi);
     const page = await context.newPage();
 

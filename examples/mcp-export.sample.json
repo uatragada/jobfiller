@@ -1,6 +1,6 @@
 {
   "source": "agent-example",
-  "process": false,
+  "process": true,
   "jobs": [
     {
       "url": "https://example.com/jobs/product-platform-engineer",

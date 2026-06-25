@@ -31,6 +31,7 @@ app-start.log
 
 # Caches and temporary files
 .cache/
+.playwright-cli/
 cache/
 tmp/
 temp/
@@ -51,6 +52,8 @@ private/
 *.docx
 *.xlsx
 *.csv
+docs/screenshots/*.png
+docs/ui-mockups/*.png
 
 # Keep public docs and samples visible
 !README.md

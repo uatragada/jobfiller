@@ -9,8 +9,9 @@ from dataclasses import dataclass
 import urllib.request
 from typing import Any
 
-from ..settings import llm_settings
+from ..settings import candidate_profile, llm_settings
 from ..models import Artifact, Grade, Job
+from .document_builder import build_cover_letter_prompt
 from .normalize import unsafe_loopback_http_url_reason
 
 
@@ -74,6 +75,7 @@ class ResumeValidationResult:
     risks: list[str]
     edits: list[str]
     keyword_hits: list[str]
+    missing_keywords: list[str]
 
 
 def _normalize_text(value: str) -> str:
@@ -124,7 +126,10 @@ def _target_tokens_found(source: str, job: Job) -> list[str]:
 
 def _has_bottom_technologies_section(source: str) -> bool:
     tail = source[-950:] if len(source) > 950 else source
-    return bool(re.search(r"\btechnolog(?:ies|y)\s*:", tail))
+    return bool(
+        re.search(r"(?im)^\s*technolog(?:ies|y)\s*$", tail)
+        or re.search(r"(?i)\btechnolog(?:ies|y)\s+(?:languages|frameworks|tools|backend|frontend|databases)\s*:", tail)
+    )
 
 
 def _section_hit(text: str, needle: str) -> bool:
@@ -142,7 +147,7 @@ def validate_resume_text(job: Job, text: str, page_count: int) -> ResumeValidati
     no_target_or_objective = not bool(
         re.search(r"\b(target|objective)\s*(section|statement)?\b", normalized)
     )
-    bottom_technologies_present = _has_bottom_technologies_section(normalized)
+    bottom_technologies_present = _has_bottom_technologies_section(text)
     profile_placeholder_present = bool(
         re.search(
             r"\b(your name|add contact information|add education in settings|configure profile|configured candidate project|add your experience)\b",
@@ -199,7 +204,146 @@ def validate_resume_text(job: Job, text: str, page_count: int) -> ResumeValidati
         risks=risks,
         edits=edits,
         keyword_hits=keyword_hits,
+        missing_keywords=missing_keywords,
     )
+
+
+SCORE_LABELS = {
+    "role_fit": "Role fit",
+    "tailoring": "Tailoring",
+    "technical_strength": "Technical strength",
+    "formatting": "Formatting",
+    "ats_readability": "ATS readability",
+}
+
+
+SCORE_WEIGHTS = {
+    "role_fit": 0.25,
+    "tailoring": 0.25,
+    "technical_strength": 0.2,
+    "formatting": 0.15,
+    "ats_readability": 0.15,
+}
+
+
+def _score_percent(value: Any) -> int:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if numeric <= 1:
+        numeric *= 100
+    elif numeric <= 5:
+        numeric *= 20
+    return max(0, min(100, int(round(numeric))))
+
+
+def _score_status(percent: int) -> str:
+    if percent >= 88:
+        return "strong"
+    if percent >= 72:
+        return "mixed"
+    return "needs_work"
+
+
+def _score_evidence(key: str, job: Job, validation: ResumeValidationResult, percent: int) -> str:
+    if key == "role_fit":
+        company_note = f"References {job.company} and role language." if percent >= 80 else "Company or role-specific evidence is thin."
+        title_terms = [token for token in re.split(r"[\s\-_/]+", _normalize_keyword_phrase(job.title or "")) if len(token) > 2][:4]
+        return f"{company_note} Target role terms: {', '.join(title_terms) or 'none captured'}."
+    if key == "tailoring":
+        matched = len(validation.keyword_hits)
+        missing = len(validation.missing_keywords)
+        return f"Matches {matched} target keyword(s); {missing} keyword(s) still need stronger proof."
+    if key == "technical_strength":
+        hits = ", ".join(validation.keyword_hits[:5])
+        return hits or "Technical keyword evidence is limited in the extracted resume text."
+    if key == "formatting":
+        return "One-page and section-structure checks passed." if percent >= 85 else "Formatting checks found length or section-structure issues."
+    if key == "ats_readability":
+        return "Keyword coverage supports ATS parsing." if percent >= 80 else "ATS keyword coverage is below the target threshold."
+    return "Score derived from local LLM output and deterministic resume checks."
+
+
+def _score_recommendation(key: str, validation: ResumeValidationResult) -> str:
+    if key == "role_fit":
+        return "Move the strongest role-specific evidence into the summary and first project bullets."
+    if key == "tailoring":
+        missing = ", ".join(validation.missing_keywords[:4])
+        return f"Add concrete evidence for missing keywords: {missing}." if missing else "Keep tailoring explicit and tied to the job requirements."
+    if key == "technical_strength":
+        return "Quantify backend, API, data, or automation work where the job emphasizes those skills."
+    if key == "formatting":
+        return "Keep the PDF to one page with no Target/Objective or standalone bottom Technologies section."
+    if key == "ats_readability":
+        return "Use exact job keywords naturally in project bullets and skills context."
+    return "Review the generated artifact before submitting."
+
+
+def _build_score_breakdown(job: Job, parsed: dict[str, Any], validation: ResumeValidationResult) -> dict[str, object]:
+    scores = parsed.get("scores") if isinstance(parsed.get("scores"), dict) else {}
+    score_items = []
+    weighted_total = 0.0
+    weight_total = 0.0
+    for key, label in SCORE_LABELS.items():
+        percent = _score_percent(scores.get(key, validation.scores.get(key, 0)))
+        weight = SCORE_WEIGHTS.get(key, 0.0)
+        weighted_total += percent * weight
+        weight_total += weight
+        score_items.append(
+            {
+                "key": key,
+                "label": label,
+                "score": percent,
+                "weight": weight,
+                "status": _score_status(percent),
+                "evidence": _score_evidence(key, job, validation, percent),
+                "recommendation": _score_recommendation(key, validation),
+            }
+        )
+
+    pass_labels = {
+        "one_page": "One-page PDF",
+        "no_target_or_objective": "No Target/Objective section",
+        "no_project_dates": "No project dates",
+        "no_bottom_technologies_section": "No bottom Technologies section",
+        "clear_bold_hierarchy": "Clear heading hierarchy",
+        "keywords_match_role": "Keywords match role",
+        "company_and_role_reference": "Company and role reference",
+        "profile_configured": "Candidate profile configured",
+    }
+    checks = [
+        {
+            "key": key,
+            "label": pass_labels.get(key, key.replace("_", " ").title()),
+            "passed": bool(value),
+            "impact": "blocking" if not value else "supporting",
+        }
+        for key, value in validation.passes.items()
+    ]
+    blocking_checks = [item["label"] for item in checks if not item["passed"]]
+    computed_score = int(round(weighted_total / weight_total)) if weight_total else 0
+    existing = parsed.get("breakdown") if isinstance(parsed.get("breakdown"), dict) else {}
+    return {
+        "summary": existing.get("summary")
+        or f"Overall score is driven by {len(validation.keyword_hits)} keyword match(es), {len(blocking_checks)} blocking check(s), and the local LLM grade {parsed.get('overall_grade', '')}.",
+        "computed_score": computed_score,
+        "score_items": score_items,
+        "checks": checks,
+        "keyword_coverage": {
+            "matched": validation.keyword_hits,
+            "missing": validation.missing_keywords[:12],
+            "matched_count": len(validation.keyword_hits),
+            "missing_count": len(validation.missing_keywords),
+        },
+        "decision": {
+            "ready_to_send": bool(parsed.get("ready_to_send")),
+            "blocking_checks": blocking_checks,
+            "grade": parsed.get("overall_grade", ""),
+        },
+        "risks": parsed.get("top_risks", []),
+        "recommended_edits": parsed.get("recommended_edits", []),
+    }
 
 
 def _merge_grade_payload(job: Job, parsed: dict[str, Any], validation: ResumeValidationResult) -> dict[str, Any]:
@@ -244,6 +388,7 @@ def _merge_grade_payload(job: Job, parsed: dict[str, Any], validation: ResumeVal
     elif blocking:
         parsed["overall_grade"] = parsed.get("overall_grade") or "C-"
 
+    parsed["breakdown"] = _build_score_breakdown(job, parsed, validation)
     return parsed
 
 
@@ -282,6 +427,50 @@ def _compact(value: str, limit: int = 6500) -> str:
     return value if len(value) <= limit else value[:limit] + "\n...[truncated for grading prompt]"
 
 
+def _clean_model_text(value: str) -> str:
+    value = str(value or "").strip()
+    value = re.sub(r"^```(?:text|markdown)?\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s*```$", "", value)
+    return value.strip()
+
+
+def generate_cover_letter(job: Job, fallback_draft: str) -> str:
+    if not configured_model():
+        return fallback_draft
+    profile = candidate_profile()
+    has_source_cover_letter = any(
+        str(profile.get(key) or "").strip()
+        for key in ("cover_letter", "cover_letter_sample", "base_cover_letter", "source_cover_letter")
+    )
+    if not has_source_cover_letter:
+        return fallback_draft
+    prompt = build_cover_letter_prompt(job, fallback_draft)
+    payload = {
+        "model": configured_model(),
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": float(llm_settings().get("temperature") or 0.1),
+            "num_ctx": int(llm_settings().get("num_ctx") or 8192),
+        },
+    }
+    request = urllib.request.Request(
+        ollama_generate_url(),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            raw = json.loads(response.read().decode("utf-8")).get("response", "")
+    except Exception:
+        return fallback_draft
+    generated = _clean_model_text(raw)
+    if len(generated.split()) < 80:
+        return fallback_draft
+    return generated + "\n"
+
+
 def grade_resume(job: Job, artifact: Artifact) -> Grade:
     text, page_count = extract_pdf_text(artifact.resume_pdf_path)
     validation = validate_resume_text(job, text, page_count)
@@ -311,7 +500,14 @@ Return JSON only:
   "scores": {{"role_fit": 1, "tailoring": 1, "technical_strength": 1, "formatting": 1, "ats_readability": 1}},
   "passes": {{"one_page": true, "no_target_or_objective": true, "no_project_dates": true, "no_bottom_technologies_section": true, "clear_bold_hierarchy": true, "keywords_match_role": true}},
   "top_risks": ["risk 1", "risk 2", "risk 3"],
-  "recommended_edits": ["edit 1", "edit 2", "edit 3"]
+  "recommended_edits": ["edit 1", "edit 2", "edit 3"],
+  "breakdown": {{
+    "summary": "one paragraph explaining why this grade was assigned",
+    "score_items": [
+      {{"key": "role_fit", "score": 92, "evidence": "specific resume evidence", "recommendation": "specific next edit"}}
+    ],
+    "decision": {{"ready_to_send": true, "blocking_checks": []}}
+  }}
 }}
 """
     payload = {

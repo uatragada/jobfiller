@@ -22,6 +22,16 @@ def latest_grade(job: Job) -> Grade | None:
     return sorted(job.grades, key=lambda item: item.created_at, reverse=True)[0] if job.grades else None
 
 
+def artifact_files_available(job: Job) -> bool:
+    artifact = latest_artifact(job)
+    if not artifact:
+        return False
+    return all(
+        bool(path_value and Path(path_value).exists())
+        for path_value in (artifact.resume_tex_path, artifact.resume_pdf_path, artifact.cover_letter_path)
+    )
+
+
 def grade_artifact(db: Session, artifact: Artifact) -> Grade | None:
     if not artifact.resume_pdf_path:
         message = "Local LLM grading skipped because resume PDF is missing."
@@ -70,7 +80,7 @@ def grade_artifact(db: Session, artifact: Artifact) -> Grade | None:
 
 
 def process_job(db: Session, job: Job, *, force: bool = False) -> Job:
-    if job.status == "READY" and not force:
+    if job.status == "READY" and not force and artifact_files_available(job):
         return job
     open_questions = ensure_questions(db, job)
     if open_questions:
@@ -225,8 +235,9 @@ def apply_fact_to_tagged_open_questions(
 
 def process_newest_queue(db: Session, limit: int = 20, *, remote_first: bool = True) -> int:
     jobs = db.scalars(
-        select(Job).where(Job.status.in_(["PARSED", "DISCOVERED"]))
+        select(Job).where(Job.status.in_(["PARSED", "DISCOVERED", "READY"]))
     ).all()
+    jobs = [job for job in jobs if job.status != "READY" or not artifact_files_available(job)]
     jobs = sorted(
         jobs,
         key=lambda job: scan_sort_key(

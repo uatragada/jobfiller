@@ -40,8 +40,9 @@ except Exception:  # pragma: no cover - standalone fallback if app package impor
         return None
 
 try:
-    from app.backend.schemas import ImportJobRequest
+    from app.backend.schemas import ApplicationEmailIn, ImportJobRequest
 except Exception:  # pragma: no cover - standalone fallback if app package import is unavailable.
+    ApplicationEmailIn = None  # type: ignore[assignment]
     ImportJobRequest = None  # type: ignore[assignment]
 
 
@@ -77,6 +78,24 @@ JOB_RECORD_SCHEMA: dict[str, Any] = {
     "additionalProperties": True,
 }
 
+EMAIL_RECORD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string", "description": "Stable Gmail or message id. Required."},
+        "thread_id": {"type": "string"},
+        "sender": {"type": "string"},
+        "from": {"type": "string"},
+        "subject": {"type": "string"},
+        "snippet": {"type": "string"},
+        "body": {"type": "string"},
+        "email_ts": {"type": "string", "description": "ISO timestamp when the email was received."},
+        "received_at": {"type": "string", "description": "ISO timestamp when the email was received."},
+        "display_url": {"type": "string", "description": "Gmail evidence URL or app-safe email URL."},
+    },
+    "required": ["id"],
+    "additionalProperties": True,
+}
+
 
 STRING_LIMITS = {
     "url": 2048,
@@ -102,7 +121,7 @@ TOOLS: list[dict[str, Any]] = [
         "name": "export_jobs_to_jobfiller",
         "description": (
             "Export one or more discovered job records into the local JobFiller app. "
-            "This creates or updates jobs through /api/imports/bulk and can optionally process artifacts."
+            "This creates or updates jobs through /api/imports/bulk and automatically runs the question/artifact pipeline."
         ),
         "inputSchema": {
             "type": "object",
@@ -115,7 +134,7 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "process": {
                     "type": "boolean",
-                    "description": "When true, JobFiller immediately runs missing-info checks and artifact generation.",
+                    "description": "When true, JobFiller immediately runs artifact generation after import. Question extraction always runs.",
                     "default": False,
                 },
                 "api_base": {
@@ -124,6 +143,30 @@ TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["jobs"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "export_application_emails_to_jobfiller",
+        "description": (
+            "Export application-status email records into the local JobFiller Email Alerts dashboard. "
+            "This creates application event rows through /api/email-sync/applications instead of importing job postings."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "messages": {"type": "array", "items": EMAIL_RECORD_SCHEMA, "minItems": 1},
+                "source": {
+                    "type": "string",
+                    "description": "Email importer label stored on each application event, for example gmail or gmail-deep-scan.",
+                    "default": "gmail",
+                },
+                "api_base": {
+                    "type": "string",
+                    "description": "Optional local JobFiller API base URL. Defaults to JOBFILLER_API_BASE or http://127.0.0.1:8001/api.",
+                },
+            },
+            "required": ["messages"],
             "additionalProperties": False,
         },
     },
@@ -274,6 +317,31 @@ def _validate_jobs(jobs: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]
     return valid, errors
 
 
+def _validate_email_messages(messages: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not isinstance(messages, list):
+        return [], [{"index": None, "error": "messages must be an array"}]
+    if len(messages) > 200:
+        return [], [{"index": None, "error": "messages must contain at most 200 records per export"}]
+
+    valid: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            errors.append({"index": index, "error": "message must be an object"})
+            continue
+        normalized = dict(message)
+        normalized["id"] = str(normalized.get("id") or "").strip()
+        if not normalized["id"]:
+            errors.append({"index": index, "error": "message.id is required"})
+            continue
+        schema_error = _email_schema_validation_error(normalized)
+        if schema_error:
+            errors.append({"index": index, "id": normalized["id"], "error": schema_error})
+            continue
+        valid.append(normalized)
+    return valid, errors
+
+
 def _schema_validation_error(job: dict[str, Any]) -> str | None:
     if ImportJobRequest is not None:
         try:
@@ -293,6 +361,31 @@ def _schema_validation_error(job: dict[str, Any]) -> str | None:
             return "fit_score must be an integer from 0 to 100."
         if score < 0 or score > 100:
             return "fit_score must be between 0 and 100."
+    return None
+
+
+def _email_schema_validation_error(message: dict[str, Any]) -> str | None:
+    if ApplicationEmailIn is not None:
+        try:
+            ApplicationEmailIn.model_validate(message)
+        except Exception as exc:  # noqa: BLE001 - convert pydantic details into row-level MCP output.
+            return _compact_validation_error(exc)
+        return None
+
+    limits = {
+        "id": 240,
+        "thread_id": 240,
+        "sender": 500,
+        "from": 500,
+        "subject": 1000,
+        "snippet": 4000,
+        "body": 50000,
+        "display_url": 2048,
+    }
+    for field, max_length in limits.items():
+        value = message.get(field)
+        if value is not None and len(str(value)) > max_length:
+            return f"{field} must be {max_length} characters or fewer."
     return None
 
 
@@ -338,6 +431,46 @@ def export_jobs_to_jobfiller(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def export_application_emails_to_jobfiller(arguments: dict[str, Any]) -> dict[str, Any]:
+    valid, errors = _validate_email_messages(arguments.get("messages"))
+    if errors:
+        raise ToolExecutionError(json.dumps({"message": "Invalid application email export payload.", "errors": errors}, indent=2))
+
+    source = str(arguments.get("source") or "gmail")
+    api_base = _api_base(arguments.get("api_base"))
+    token = _api_token(api_base)
+    if not token:
+        raise ToolExecutionError("Could not obtain a local JobFiller mutation token. Start JobFiller first.")
+
+    responses: list[dict[str, Any]] = []
+    aggregate: dict[str, Any] = {"synced": 0, "job_ids": [], "event_ids": [], "states": {}}
+    for start in range(0, len(valid), 50):
+        chunk = valid[start : start + 50]
+        response = _json_request(
+            "POST",
+            f"{api_base}/email-sync/applications",
+            {"source": source, "messages": chunk},
+            timeout=120.0,
+            headers={"X-JobFiller-Token": token},
+        )
+        responses.append(response)
+        aggregate["synced"] += int(response.get("synced") or 0)
+        aggregate["job_ids"].extend(response.get("job_ids") or [])
+        aggregate["event_ids"].extend(response.get("event_ids") or [])
+        for state, count in (response.get("states") or {}).items():
+            aggregate["states"][state] = int(aggregate["states"].get(state) or 0) + int(count or 0)
+
+    aggregate["job_ids"] = sorted({int(job_id) for job_id in aggregate["job_ids"]})
+    aggregate["event_ids"] = [int(event_id) for event_id in aggregate["event_ids"]]
+    return {
+        "api_base": api_base,
+        "submitted": len(valid),
+        "chunks": len(responses),
+        "response": aggregate,
+        "chunk_responses": responses,
+    }
+
+
 def jobfiller_status(arguments: dict[str, Any]) -> dict[str, Any]:
     api_base = _api_base(arguments.get("api_base"))
     health = _json_request("GET", f"{api_base}/health", timeout=5.0)
@@ -356,6 +489,7 @@ def jobfiller_status(arguments: dict[str, Any]) -> dict[str, Any]:
 
 TOOL_HANDLERS = {
     "export_jobs_to_jobfiller": export_jobs_to_jobfiller,
+    "export_application_emails_to_jobfiller": export_application_emails_to_jobfiller,
     "validate_jobfiller_export": validate_jobfiller_export,
     "jobfiller_status": jobfiller_status,
 }
@@ -393,7 +527,9 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
                     "serverInfo": SERVER_INFO,
                     "instructions": (
                         "Use export_jobs_to_jobfiller to send discovered job records to the local "
-                        "JobFiller app. The server imports data only; it never submits applications."
+                        "JobFiller app. Use export_application_emails_to_jobfiller for Gmail/application "
+                        "status emails so they appear in Email Alerts instead of the Jobs dashboard. "
+                        "The server imports data only; it never submits applications."
                     ),
                 },
             }

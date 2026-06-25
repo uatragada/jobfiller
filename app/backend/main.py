@@ -17,11 +17,15 @@ from sqlalchemy.orm import Session
 
 from . import __version__
 from .database import get_db, init_db
-from .models import Artifact, Grade, Job, ProfileFact, Question, Run, utcnow
+from .models import ApplicationEvent, Artifact, Grade, Job, ProfileFact, Question, Run, utcnow
 from .schemas import (
     AnswerQuestionRequest,
+    ApplicationEventOut,
     ArtifactContentRequest,
     BulkImportRequest,
+    EmailSyncOut,
+    EmailSyncRequest,
+    GmailAlertImportRequest,
     ScanRequest,
     ImportJobRequest,
     JobOut,
@@ -36,8 +40,11 @@ from .schemas import (
 )
 from .settings import OUTPUT_ROOT, load_settings, public_settings, save_settings
 from .services.artifacts import read_artifact_text, update_artifact_text
+from .services.email_status_sync import sync_application_emails
 from .services.local_llm import allow_remote_ollama, configured_model, grading_model_name, ollama_tags_url, ollama_url_policy
+from .services.codex_scan import create_codex_scan_request
 from .services.ingestion import DEFAULT_SCAN_LIMIT, run_scan, upsert_job
+from .services.gmail_importer import parse_gmail_alert_email
 from .services.normalize import unsafe_import_url_reason, unsafe_loopback_http_url_reason
 from .services.processor import (
     answer_question,
@@ -50,7 +57,7 @@ from .services.processor import (
     process_newest_queue,
     upsert_profile_fact,
 )
-from .services.missing_info import impact_for_tag, impact_score_for_tag
+from .services.missing_info import ensure_questions, impact_for_tag, impact_score_for_tag
 from .services.time_utils import scan_sort_key
 from .services.worker import worker
 from .services.workbook import CSV_EXPORT_PATH, JSON_EXPORT_PATH, WORKBOOK_PATH, build_tomorrow_checklist, export_current_json_csv, export_current_workbook
@@ -63,6 +70,8 @@ API_CAPABILITIES = {
     "question_answer_autoflush_fix": True,
     "local_mutation_token": True,
     "token_required_for_local_writes": True,
+    "gmail_application_status_sync": True,
+    "email_dashboard_import": True,
 }
 
 
@@ -151,6 +160,7 @@ def job_out(job: Job) -> JobOut:
     artifact = latest_artifact(job)
     grade = latest_grade(job)
     readiness_score = compute_readiness(job)
+    grade_payload = grade_payload_for_api(grade)
     return JobOut(
         id=job.id,
         company=job.company,
@@ -162,6 +172,12 @@ def job_out(job: Job) -> JobOut:
         apply_url=job.apply_url,
         fit_score=job.fit_score,
         status=job.status,
+        application_state=job.application_state or "DISCOVERED",
+        follow_up_action=job.follow_up_action or "",
+        follow_up_due_at=job.follow_up_due_at,
+        last_status_email_at=job.last_status_email_at,
+        last_status_email_subject=job.last_status_email_subject or "",
+        last_status_email_url=job.last_status_email_url or "",
         role_family=job.role_family,
         key_requirements=job.key_requirements,
         keywords=job.keywords,
@@ -174,6 +190,10 @@ def job_out(job: Job) -> JobOut:
         last_seen_at=job.last_seen_at,
         updated_at=job.updated_at,
         latest_grade=grade.overall_grade if grade else None,
+        latest_grade_scores=grade_payload["scores"],
+        latest_grade_passes=grade_payload["passes"],
+        latest_grade_risks=grade_payload["risks"],
+        latest_grade_breakdown=grade_payload["breakdown"],
         ready_to_send=grade.ready_to_send if grade else None,
         latest_resume_pdf_path=artifact.resume_pdf_path if artifact else None,
         latest_cover_letter_path=artifact.cover_letter_path if artifact else None,
@@ -181,6 +201,84 @@ def job_out(job: Job) -> JobOut:
         artifact_count=len(job.artifacts),
         readiness_score=readiness_score,
         open_questions=sum(1 for question in job.questions if question.status == "OPEN"),
+    )
+
+
+def parse_json_field(value: str | None, fallback: object) -> object:
+    if not value:
+        return fallback
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return fallback
+    return parsed if isinstance(parsed, type(fallback)) else fallback
+
+
+def fallback_grade_breakdown(grade: Grade | None, scores: dict[str, object], passes: dict[str, object], risks: list[object]) -> dict[str, object]:
+    if not grade:
+        return {}
+    score_items = [
+        {
+            "key": key,
+            "label": str(key).replace("_", " ").title(),
+            "score": int(round(float(value) * 100 if isinstance(value, (int, float)) and value <= 1 else float(value))),
+            "weight": None,
+            "status": "strong" if isinstance(value, (int, float)) and value >= 0.85 else "mixed",
+            "evidence": "Stored local LLM score from an earlier grade record.",
+            "recommendation": "Regenerate the grade to capture deeper evidence for this dimension.",
+        }
+        for key, value in scores.items()
+        if isinstance(value, (int, float))
+    ]
+    checks = [
+        {
+            "key": key,
+            "label": str(key).replace("_", " ").title(),
+            "passed": bool(value),
+            "impact": "supporting" if value else "blocking",
+        }
+        for key, value in passes.items()
+    ]
+    return {
+        "summary": "This breakdown was derived from the stored grade fields. Regrade the artifact for the expanded evidence model.",
+        "computed_score": compute_grade_score(scores),
+        "score_items": score_items,
+        "checks": checks,
+        "keyword_coverage": {"matched": [], "missing": [], "matched_count": 0, "missing_count": 0},
+        "decision": {
+            "ready_to_send": grade.ready_to_send,
+            "blocking_checks": [item["label"] for item in checks if not item["passed"]],
+            "grade": grade.overall_grade,
+        },
+        "risks": risks,
+        "recommended_edits": [],
+    }
+
+
+def compute_grade_score(scores: dict[str, object]) -> int:
+    numeric_scores = [float(value) for value in scores.values() if isinstance(value, (int, float))]
+    if not numeric_scores:
+        return 0
+    average = sum(numeric_scores) / len(numeric_scores)
+    return int(round(average * 100 if average <= 1 else average * 20 if average <= 5 else average))
+
+
+def grade_payload_for_api(grade: Grade | None) -> dict[str, object]:
+    if not grade:
+        return {"scores": {}, "passes": {}, "risks": [], "breakdown": {}}
+    scores = parse_json_field(grade.scores_json, {})
+    passes = parse_json_field(grade.passes_json, {})
+    risks = parse_json_field(grade.risks_json, [])
+    raw = parse_json_field(grade.raw_json, {})
+    breakdown = raw.get("breakdown", {}) if isinstance(raw, dict) else {}
+    if not isinstance(breakdown, dict) or not breakdown:
+        breakdown = fallback_grade_breakdown(grade, scores, passes, risks)
+    return {"scores": scores, "passes": passes, "risks": risks, "breakdown": breakdown}
+
+
+def is_email_tracking_job(job: Job) -> bool:
+    return job.status == "EMAIL_TRACKING" or (
+        job.role_family == "Application Tracking" and job.source.endswith("-status")
     )
 
 
@@ -206,11 +304,10 @@ def compute_readiness(job: Job) -> int | None:
     grade = latest_grade(job)
     if not grade:
         return None
-    scores = json.loads(grade.scores_json or "{}")
-    numeric_scores = [float(value) for value in scores.values() if isinstance(value, (int, float))]
-    if numeric_scores:
-        average = sum(numeric_scores) / len(numeric_scores)
-        return int(round(average * 100 if average <= 1 else average * 20 if average <= 5 else average))
+    scores = parse_json_field(grade.scores_json, {})
+    score = compute_grade_score(scores)
+    if score:
+        return score
     return 92 if grade.ready_to_send else 55
 
 
@@ -238,7 +335,12 @@ def artifact_file_for_kind(artifact: Artifact, kind: str) -> tuple[Path, str]:
     file_path = Path(paths[kind])
     if not file_path.exists():
         raise HTTPException(status_code=404, detail=f"Artifact file missing: {file_path}")
-    media_type = "application/pdf" if kind == "resume" else "text/plain"
+    if kind == "resume":
+        media_type = "application/pdf"
+    elif kind == "cover-letter" and file_path.suffix.lower() == ".docx":
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    else:
+        media_type = "text/plain"
     return file_path, media_type
 
 
@@ -307,8 +409,14 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)) -> ScanOut:
     run = Run(kind="manual_scan", status="RUNNING", message="Manual newest-first scan started.")
     db.add(run)
     db.commit()
+    codex_request = None
     try:
         process_limit = payload.limit if payload.limit and payload.limit > 0 else DEFAULT_SCAN_LIMIT
+        if payload.codex_agent or str(payload.source or "").lower() in {"codex", "agent", "mcp"}:
+            codex_request = create_codex_scan_request(
+                limit=process_limit,
+                scanner_keywords=payload.scanner_keywords,
+            )
         imported, message = run_scan(
             db,
             run,
@@ -318,6 +426,15 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)) -> ScanOut:
             scanner_keywords=payload.scanner_keywords,
         )
         process_newest_queue(db, limit=process_limit, remote_first=payload.remote_first)
+        if codex_request:
+            suffix = (
+                f" Codex job-site scan request written to {codex_request.prompt_path}."
+                if not codex_request.launched
+                else " Codex job-site scan command launched."
+            )
+            if codex_request.launch_error:
+                suffix += f" Optional Codex launch failed: {codex_request.launch_error}"
+            message = f"{message}{suffix}"
         run.status = "SUCCEEDED"
         run.message = message
         run.finished_at = utcnow()
@@ -328,7 +445,14 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)) -> ScanOut:
         run.finished_at = utcnow()
         db.commit()
         return ScanOut(run_id=run.id, imported=0, message=run.message)
-    return ScanOut(run_id=run.id, imported=imported, message=message)
+    return ScanOut(
+        run_id=run.id,
+        imported=imported,
+        message=message,
+        codex_request_path=str(codex_request.request_path) if codex_request else None,
+        codex_prompt_path=str(codex_request.prompt_path) if codex_request else None,
+        codex_launched=bool(codex_request and codex_request.launched),
+    )
 
 
 @app.post("/api/jobs/import", response_model=JobOut)
@@ -373,8 +497,7 @@ def bulk_import(payload: BulkImportRequest, db: Session = Depends(get_db)) -> di
         try:
             validate_import_urls(item)
             job = upsert_job(db, item.model_dump(exclude_none=True), source=payload.source or "agent")
-            if payload.process:
-                process_job(db, job)
+            process_job(db, job)
             imported.append(job)
         except Exception as exc:  # keep agent batches resilient; callers get row-level errors.
             errors.append({"index": index, "url": item.url, "error": str(exc)})
@@ -386,9 +509,124 @@ def bulk_import(payload: BulkImportRequest, db: Session = Depends(get_db)) -> di
     }
 
 
+@app.post("/api/imports/gmail-alerts")
+def gmail_alert_import(payload: GmailAlertImportRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+    parsed_records: list[dict[str, object]] = []
+    parse_errors: list[dict[str, object]] = []
+    seen_urls: set[str] = set()
+    for email_index, email in enumerate(payload.emails):
+        message = email.model_dump(by_alias=False)
+        try:
+            parsed_jobs = parse_gmail_alert_email(message)
+        except Exception as exc:  # keep one bad alert from blocking the batch.
+            parse_errors.append({"email_index": email_index, "message_id": email.id or "", "error": str(exc)})
+            continue
+        for parsed_job in parsed_jobs:
+            record = parsed_job.as_import_record()
+            url = str(record.get("url") or "")
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            parsed_records.append(record)
+
+    imported: list[Job] = []
+    errors: list[dict[str, object]] = parse_errors
+    for index, record in enumerate(parsed_records):
+        try:
+            item = ImportJobRequest(**record)
+            validate_import_urls(item)
+            job = upsert_job(db, item.model_dump(exclude_none=True), source=payload.source or "gmail-alert")
+            process_job(db, job)
+            imported.append(job)
+        except Exception as exc:
+            errors.append({"index": index, "url": record.get("url", ""), "error": str(exc)})
+    db.commit()
+    return {
+        "parsed": len(parsed_records),
+        "imported": len(imported),
+        "errors": errors,
+        "job_ids": [job.id for job in imported],
+        "jobs": [
+            {
+                "id": job.id,
+                "company": job.company,
+                "title": job.title,
+                "fit_score": job.fit_score,
+                "status": job.status,
+                "open_questions": sum(1 for question in job.questions if question.status == "OPEN"),
+            }
+            for job in imported
+        ],
+    }
+
+
+def application_event_out(event: ApplicationEvent) -> ApplicationEventOut:
+    return ApplicationEventOut(
+        id=event.id,
+        job_id=event.job_id,
+        company=event.job.company,
+        title=event.job.title,
+        source=event.source,
+        external_id=event.external_id,
+        thread_id=event.thread_id,
+        sender=event.sender,
+        subject=event.subject,
+        state=event.state,
+        follow_up_action=event.follow_up_action,
+        action_url=_safe_application_event_url(event.action_url),
+        evidence_url=_safe_application_event_url(event.evidence_url),
+        received_at=event.received_at,
+    )
+
+
+def _safe_application_event_url(value: str | None) -> str:
+    candidate = str(value or "").strip()
+    if not candidate or unsafe_import_url_reason(candidate):
+        return ""
+    return candidate
+
+
+@app.post("/api/email-sync/applications", response_model=EmailSyncOut)
+def sync_application_status_emails(payload: EmailSyncRequest, db: Session = Depends(get_db)) -> EmailSyncOut:
+    run = Run(kind="gmail_status_sync", status="RUNNING", message=f"Syncing {len(payload.messages)} Gmail status email(s).")
+    db.add(run)
+    db.flush()
+    try:
+        result = sync_application_emails(
+            db,
+            [message.model_dump() for message in payload.messages],
+            source=payload.source or "gmail",
+        )
+        run.status = "SUCCEEDED"
+        run.message = (
+            f"Synced {result['synced']} Gmail status email(s) across "
+            f"{len(result['job_ids'])} application(s)."
+        )
+        run.finished_at = utcnow()
+        db.commit()
+        return EmailSyncOut(**result)
+    except Exception as exc:
+        run.status = "FAILED"
+        run.message = f"Gmail status sync failed: {exc}"
+        run.finished_at = utcnow()
+        db.commit()
+        raise
+
+
+@app.get("/api/application-events", response_model=list[ApplicationEventOut])
+def list_application_events(limit: int = 50, db: Session = Depends(get_db)) -> list[ApplicationEventOut]:
+    capped_limit = max(1, min(limit, 200))
+    events = db.scalars(
+        select(ApplicationEvent)
+        .order_by(ApplicationEvent.received_at.desc(), ApplicationEvent.updated_at.desc())
+        .limit(capped_limit)
+    ).all()
+    return [application_event_out(event) for event in events]
+
+
 @app.get("/api/jobs", response_model=list[JobOut])
 def list_jobs(sort: str = "newest", remote_first: bool = True, db: Session = Depends(get_db)) -> list[JobOut]:
-    jobs = db.scalars(select(Job)).all()
+    jobs = [job for job in db.scalars(select(Job)).all() if not is_email_tracking_job(job)]
 
     if not jobs:
         return []
@@ -454,6 +692,7 @@ def get_job(job_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
         raise HTTPException(status_code=404, detail="Job not found")
     artifact = latest_artifact(job)
     grade = latest_grade(job)
+    grade_payload = grade_payload_for_api(grade)
     return {
         "job": job_out(job).model_dump(),
         "post": {
@@ -482,9 +721,10 @@ def get_job(job_id: int, db: Session = Depends(get_db)) -> dict[str, object]:
         "grade": {
             "overall_grade": grade.overall_grade if grade else None,
             "ready_to_send": grade.ready_to_send if grade else None,
-            "scores": json.loads(grade.scores_json) if grade else {},
-            "passes": json.loads(grade.passes_json) if grade else {},
-            "risks": json.loads(grade.risks_json) if grade else [],
+            "scores": grade_payload["scores"],
+            "passes": grade_payload["passes"],
+            "risks": grade_payload["risks"],
+            "breakdown": grade_payload["breakdown"],
         },
     }
 
@@ -588,6 +828,38 @@ def question_out(question: Question) -> QuestionOut:
     )
 
 
+def dedupe_question_key(question: QuestionOut) -> tuple[str, str, str]:
+    return (question.status, question.tag, normalize_question_text(question.question_text))
+
+
+def normalize_question_text(question_text: str) -> str:
+    return " ".join(question_text.lower().split())
+
+
+def dedupe_question_rows(rows: list[QuestionOut]) -> list[QuestionOut]:
+    grouped: dict[tuple[str, str, str], list[QuestionOut]] = {}
+    for row in rows:
+        grouped.setdefault(dedupe_question_key(row), []).append(row)
+
+    deduped: list[QuestionOut] = []
+    for group in grouped.values():
+        representative = sorted(
+            group,
+            key=lambda row: (row.blocking, row.impact_score, row.created_at),
+            reverse=True,
+        )[0]
+        duplicate_job_ids = sorted({row.job_id for row in group})
+        deduped.append(
+            representative.model_copy(
+                update={
+                    "duplicate_count": len(group),
+                    "duplicate_job_ids": duplicate_job_ids,
+                }
+            )
+        )
+    return deduped
+
+
 @app.get("/api/questions", response_model=list[QuestionOut])
 def list_questions(
     status: str = "OPEN",
@@ -600,7 +872,7 @@ def list_questions(
         query = query.where(Question.status == status)
     if tag and tag != "all":
         query = query.where(Question.tag == tag)
-    rows = [question_out(q) for q in db.scalars(query).all()]
+    rows = dedupe_question_rows([question_out(q) for q in db.scalars(query).all()])
     if sort == "impact":
         rows.sort(key=lambda row: (row.blocking, row.impact_score, row.created_at), reverse=True)
     elif sort == "impact-low":
@@ -631,10 +903,20 @@ def skip_question(question_id: int, db: Session = Depends(get_db)) -> dict[str, 
     question = db.get(Question, question_id)
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
-    question.status = "SKIPPED"
-    question.answered_at = utcnow()
+    now = utcnow()
+    skipped = 0
+    normalized_text = normalize_question_text(question.question_text)
+    linked_questions = db.scalars(
+        select(Question).where(Question.tag == question.tag, Question.status == "OPEN")
+    ).all()
+    for linked_question in linked_questions:
+        if normalize_question_text(linked_question.question_text) != normalized_text:
+            continue
+        linked_question.status = "SKIPPED"
+        linked_question.answered_at = now
+        skipped += 1
     db.commit()
-    return {"id": question.id, "status": question.status}
+    return {"id": question.id, "status": "SKIPPED", "skipped": skipped}
 
 
 @app.get("/api/profile-facts", response_model=list[ProfileFactOut])
@@ -958,6 +1240,7 @@ def grade_artifact_now(artifact_id: int, db: Session = Depends(get_db)) -> dict[
     latest = latest_grade(artifact.job)
     if not latest:
         return {"status": "not_graded", "artifact_id": artifact.id}
+    grade_payload = grade_payload_for_api(latest)
     return {
         "status": "graded",
         "artifact_id": artifact.id,
@@ -965,6 +1248,10 @@ def grade_artifact_now(artifact_id: int, db: Session = Depends(get_db)) -> dict[
         "grade_id": latest.id,
         "overall_grade": latest.overall_grade,
         "ready_to_send": latest.ready_to_send,
+        "scores": grade_payload["scores"],
+        "passes": grade_payload["passes"],
+        "risks": grade_payload["risks"],
+        "breakdown": grade_payload["breakdown"],
         "grade_revision": latest.id,
     }
 

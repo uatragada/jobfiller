@@ -168,6 +168,37 @@ def test_scan_failure_returns_failed_run_without_unhandled_exception(monkeypatch
     assert "scanner unavailable" in runs[0]["message"]
 
 
+def test_scan_can_create_codex_job_site_handoff(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    request_path = tmp_path / "codex_scan_request.json"
+    prompt_path = tmp_path / "codex_scan_prompt.txt"
+    monkeypatch.setattr("app.backend.services.codex_scan.REQUEST_JSON_PATH", request_path)
+    monkeypatch.setattr("app.backend.services.codex_scan.REQUEST_PROMPT_PATH", prompt_path)
+
+    response = client.post(
+        "/api/scans",
+        json={
+            "limit": 3,
+            "source": "seed",
+            "remote_first": True,
+            "scanner_keywords": "backend, fastapi",
+            "codex_agent": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["codex_request_path"] == str(request_path)
+    assert payload["codex_prompt_path"] == str(prompt_path)
+    assert payload["codex_launched"] is False
+    assert "Codex job-site scan request" in payload["message"]
+    assert request_path.exists()
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "Use the local JobFiller MCP server." in prompt
+    assert "export_jobs_to_jobfiller" in prompt
+    assert "LinkedIn" in prompt
+    assert "Indeed" in prompt
+
+
 def test_import_processing_failure_creates_failed_job_and_run(monkeypatch: pytest.MonkeyPatch) -> None:
     def unavailable_job_page(db, job, *, force: bool = False):  # noqa: ANN001
         raise RuntimeError("job page unavailable")
@@ -419,7 +450,165 @@ def test_bulk_import_accepts_agent_job_records() -> None:
     assert payload["imported"] == 1
     assert payload["errors"] == []
     jobs = client.get("/api/jobs").json()
-    assert any(job["company"] == "AgentCo" and job["source"] == "agent-fixture" for job in jobs)
+    job = next(job for job in jobs if job["company"] == "AgentCo" and job["source"] == "agent-fixture")
+    assert job["latest_artifact_id"] is not None
+
+
+def test_bulk_import_blocks_auto_generation_when_questions_are_open() -> None:
+    response = client.post(
+        "/api/imports/bulk",
+        json={
+            "source": "agent-fixture",
+            "jobs": [
+                {
+                    "url": "https://example.com/jobs/agent-imported-questions",
+                    "company": "QuestionCo",
+                    "title": "Backend Finance Engineer",
+                    "location": "Remote",
+                    "work_model": "Remote",
+                    "key_requirements": "finance; fixed income; backend APIs",
+                    "keywords": "finance; backend",
+                    "manual_questions": "Can you relocate to Boston?\nAre you comfortable with a hybrid schedule?",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["imported"] == 1
+
+    jobs = client.get("/api/jobs").json()
+    job = next(item for item in jobs if item["company"] == "QuestionCo")
+    assert job["status"] == "NEEDS_INFO"
+    assert job["open_questions"] >= 3
+    assert job["latest_artifact_id"] is None
+
+    questions = [item for item in client.get("/api/questions?status=OPEN").json() if item["job_id"] == job["id"]]
+    assert any(item["tag"] == "finance_motivation" for item in questions)
+    assert any(item["question_text"] == "Can you relocate to Boston?" for item in questions)
+    assert any(item["question_text"] == "Are you comfortable with a hybrid schedule?" for item in questions)
+
+
+def test_global_question_queue_deduplicates_reusable_questions() -> None:
+    response = client.post(
+        "/api/imports/bulk",
+        json={
+            "source": "agent-fixture",
+            "jobs": [
+                {
+                    "url": "https://example.com/jobs/dedupe-question-a",
+                    "company": "FirstQuestionCo",
+                    "title": "Backend Engineer",
+                    "manual_questions": "Confirm commute or relocation fit for the on-site requirement.",
+                },
+                {
+                    "url": "https://example.com/jobs/dedupe-question-b",
+                    "company": "SecondQuestionCo",
+                    "title": "Backend Engineer",
+                    "manual_questions": "Confirm commute or relocation fit for the on-site requirement.",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    job_ids = response.json()["job_ids"]
+
+    questions = client.get("/api/questions?status=OPEN").json()
+    matching = [
+        question
+        for question in questions
+        if question["question_text"] == "Confirm commute or relocation fit for the on-site requirement."
+    ]
+    assert len(matching) == 1
+    assert matching[0]["duplicate_count"] == 2
+    assert matching[0]["duplicate_job_ids"] == sorted(job_ids)
+
+    for job_id in job_ids:
+        job_questions = client.get(f"/api/jobs/{job_id}/questions?status=OPEN").json()
+        assert len(
+            [
+                question
+                for question in job_questions
+                if question["question_text"] == "Confirm commute or relocation fit for the on-site requirement."
+            ]
+        ) == 1
+
+    skipped = client.post(f"/api/questions/{matching[0]['id']}/skip")
+    assert skipped.status_code == 200
+    assert skipped.json()["skipped"] == 2
+    all_questions = client.get("/api/questions?status=all").json()
+    updated = [
+        question
+        for question in all_questions
+        if question["question_text"] == "Confirm commute or relocation fit for the on-site requirement."
+    ]
+    assert len(updated) == 1
+    assert updated[0]["duplicate_count"] == 2
+    assert updated[0]["duplicate_job_ids"] == sorted(job_ids)
+    assert {question["status"] for question in updated} == {"SKIPPED"}
+
+
+def test_email_status_sync_updates_pipeline_followups_and_exports() -> None:
+    response = client.post(
+        "/api/email-sync/applications",
+        json={
+            "source": "gmail",
+            "messages": [
+                {
+                    "id": "example-media-rejection",
+                    "thread_id": "example-media-rejection",
+                    "from": "Example Media Workday <no-reply@example-media.test>",
+                    "subject": "An update about your application for Data Platform Engineer - R000105204",
+                    "body": (
+                        "Thank you for your time in applying for the Data Platform Engineer "
+                        "- R000105204 position at Example Media. We have decided to pursue other candidates at this time."
+                    ),
+                    "email_ts": "2026-06-18T07:07:39+00:00",
+                    "display_url": "https://mail.example.test/messages/example-media-rejection",
+                },
+                {
+                    "id": "example-devices-identity",
+                    "thread_id": "example-devices-identity",
+                    "from": "Example Devices Recruiting <no-reply@example-devices.test>",
+                    "subject": "Confirm your identity for job Factory Automation Engineer - 25010802",
+                    "body": (
+                        "We need you to confirm your identity so that your job application is considered for the job "
+                        "Factory Automation Engineer - 25010802. "
+                        "Confirm your identity using this code: 123456. https://careers.example-devices.test/s/example"
+                    ),
+                    "email_ts": "2026-06-01T21:54:39+00:00",
+                    "display_url": "https://mail.example.test/messages/example-devices-identity",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["states"] == {"REJECTED": 1, "ACTION_NEEDED": 1}
+
+    events = client.get("/api/application-events?limit=10").json()
+    rejected_event = next(event for event in events if event["company"] == "Example Media")
+    action_event = next(event for event in events if event["company"] == "Example Devices")
+    assert rejected_event["state"] == "REJECTED"
+    assert "closed" in rejected_event["follow_up_action"].lower()
+    assert action_event["state"] == "ACTION_NEEDED"
+    assert "fresh code" in action_event["follow_up_action"].lower()
+
+    jobs = client.get("/api/jobs?sort=recently-updated").json()
+    assert not any(job["company"] == "Real Candidate Company" for job in jobs)
+
+    checklist = client.get("/api/checklist/apply-queue").json()
+    assert any(row["company"] == "Example Devices" and row["follow_up_action"] for row in checklist)
+
+    export = client.post("/api/export/workbook")
+    assert export.status_code == 200
+    with zipfile.ZipFile(export.json()["formats"]["xlsx"]) as archive:
+        workbook_xml = archive.read("xl/workbook.xml").decode("utf-8")
+        assert "Follow Ups" in workbook_xml
+
+    json_rows = client.get("/api/export/latest.json").json()
+    assert any(row["company"] == "Example Media" and row["application_state"] == "REJECTED" for row in json_rows)
 
 
 def test_bulk_import_rejects_oversized_batches() -> None:
@@ -520,7 +709,9 @@ def test_artifact_download_and_generation_alias_endpoints() -> None:
 
     cover_download = client.get(f"/api/artifacts/{latest_artifact_id}/download?kind=cover-letter")
     assert cover_download.status_code == 200
-    assert cover_download.headers["content-type"].startswith("text/plain")
+    assert cover_download.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
 
     latex_download = client.get(f"/api/artifacts/{latest_artifact_id}/download?kind=latex")
     assert latex_download.status_code == 200
@@ -544,8 +735,17 @@ def test_artifact_grade_endpoint_returns_current_grade() -> None:
 
     graded = client.post(f"/api/artifacts/{artifact_id}/grade")
     assert graded.status_code == 200
-    assert graded.json()["status"] == "graded"
-    assert graded.json()["overall_grade"] != ""
+    payload = graded.json()
+    assert payload["status"] == "graded"
+    assert payload["overall_grade"] != ""
+    assert payload["breakdown"]["score_items"]
+    assert payload["breakdown"]["checks"]
+    assert "keyword_coverage" in payload["breakdown"]
+    assert "recommended_edits" in payload["breakdown"]
+
+    detail = client.get(f"/api/jobs/{payload['job_id']}").json()
+    assert detail["job"]["latest_grade_breakdown"]["score_items"]
+    assert detail["grade"]["breakdown"]["score_items"]
 
 
 def test_jobs_sort_newest_first() -> None:
@@ -809,6 +1009,6 @@ def test_tomorrow_checklist_contract_and_sorting() -> None:
     assert "-resume-" in row["resume_pdf_path"]
     assert row["resume_pdf_path"].endswith(".pdf")
     assert row["resume_tex_path"].endswith("main.tex")
-    assert row["cover_letter_path"].endswith(".md")
+    assert row["cover_letter_path"].endswith(".docx")
     assert row["materials"] == "Resume and cover letter."
     assert row["manual_questions"] == ""

@@ -4,11 +4,19 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.backend.database import Base
-from app.backend.models import Job, ProfileFact, Question
+from app.backend.models import ApplicationEvent, Grade, Job, ProfileFact, Question
 from app.backend.services.ingestion import upsert_job
 from app.backend.services.ingestion import import_chrome_job_tabs, run_scan
 from app.backend.services.missing_info import ensure_questions
-from app.backend.services.processor import answer_question, apply_fact_to_tagged_open_questions, process_job, grade_artifact
+from app.backend.services.processor import (
+    answer_question,
+    apply_fact_to_tagged_open_questions,
+    artifact_files_available,
+    process_job,
+    process_newest_queue,
+    grade_artifact,
+)
+from app.backend.services.email_status_sync import sync_application_emails
 from app.backend.services.artifacts import generate_artifacts, update_artifact_text
 from app.backend.models import Run
 from pathlib import Path
@@ -54,6 +62,40 @@ def test_fit_score_does_not_default_to_entry_level_bias(monkeypatch) -> None:
     assert generic.fit_score == entry_level.fit_score
 
 
+def test_application_email_sync_redacts_identity_codes_and_sets_pipeline_state() -> None:
+    db = make_db()
+    message = {
+        "id": "example-devices-identity-redaction",
+        "thread_id": "example-devices-thread",
+        "from": "Example Devices Recruiting <no-reply@example-devices.test>",
+        "subject": "Confirm your identity for job Factory Automation Engineer - 25010802",
+        "body": (
+            "We need you to confirm your identity so that your job application is considered for the job "
+            "Factory Automation Engineer - 25010802. Confirm your identity using this code: 123456."
+        ),
+        "email_ts": "2026-06-01T21:54:39+00:00",
+        "display_url": "https://mail.example.test/messages/example-devices-identity-redaction",
+    }
+
+    result = sync_application_emails(
+        db,
+        [message],
+    )
+    db.commit()
+    second = sync_application_emails(db, [message])
+    db.commit()
+
+    assert result["states"] == {"ACTION_NEEDED": 1}
+    assert second["states"] == {"ACTION_NEEDED": 1}
+    job = db.scalars(select(Job).where(Job.company == "Example Devices")).one()
+    assert job.status == "EMAIL_TRACKING"
+    assert job.application_state == "ACTION_NEEDED"
+    assert "fresh code" in job.follow_up_action.lower()
+    event = db.scalars(select(ApplicationEvent)).one()
+    assert "123456" not in event.body_excerpt
+    assert "[redacted code]" in event.body_excerpt
+
+
 def test_fit_score_uses_configured_keywords(monkeypatch) -> None:
     monkeypatch.setattr("app.backend.services.ingestion._default_keywords", lambda: "backend, api")
 
@@ -87,6 +129,23 @@ def test_missing_info_blocks_without_inventing_claims() -> None:
 
     assert questions
     assert questions[0].tag == "cpp"
+
+
+def test_manual_question_placeholders_are_not_queued() -> None:
+    db = make_db()
+    job = upsert_job(
+        db,
+        {
+            "url": "https://www.linkedin.com/jobs/view/manual-placeholder",
+            "company": "PlaceholderCo",
+            "title": "Backend Engineer",
+            "key_requirements": "Python; APIs",
+            "keywords": "Python",
+            "manual_questions": "None found in LinkedIn preview; verify application form tomorrow.",
+        },
+    )
+
+    assert ensure_questions(db, job) == []
 
 
 def test_answer_question_creates_reusable_profile_fact() -> None:
@@ -342,6 +401,52 @@ def test_chrome_scan_imports_common_ats_job_tabs(monkeypatch) -> None:
     assert any(job.work_model == "Remote" for job in jobs)
 
 
+def test_ready_job_without_artifact_files_is_automatically_generated(monkeypatch) -> None:
+    db = make_db()
+    job = upsert_job(
+        db,
+        {
+            "url": "https://www.linkedin.com/jobs/view/ready-missing-artifacts",
+            "company": "ReadyMissingCo",
+            "title": "Backend Engineer",
+            "key_requirements": "Python; APIs; testing",
+            "keywords": "Python; FastAPI",
+        },
+    )
+    job.status = "READY"
+    db.flush()
+    assert artifact_files_available(job) is False
+
+    def ready_grade(db_session, artifact):  # noqa: ANN001
+        grade = Grade(
+            job_id=artifact.job_id,
+            artifact_id=artifact.id,
+            model="test",
+            overall_grade="A",
+            ready_to_send=True,
+            scores_json="{}",
+            passes_json="{}",
+            risks_json="[]",
+            raw_json="{}",
+        )
+        db_session.add(grade)
+        return grade
+
+    monkeypatch.setattr("app.backend.services.processor.grade_artifact", ready_grade)
+
+    processed = process_newest_queue(db, limit=5)
+    db.flush()
+    db.expire(job, ["artifacts"])
+    latest_artifact = sorted(job.artifacts, key=lambda item: item.revision, reverse=True)[0]
+
+    assert processed == 1
+    assert job.status == "READY"
+    assert artifact_files_available(job) is True
+    assert Path(latest_artifact.resume_tex_path).exists()
+    assert Path(latest_artifact.resume_pdf_path).exists()
+    assert Path(latest_artifact.cover_letter_path).exists()
+
+
 def test_artifact_paths_follow_output_contract(monkeypatch) -> None:
     monkeypatch.setattr("app.backend.services.artifacts.candidate_slug", lambda: "candidate")
     db = make_db()
@@ -360,7 +465,7 @@ def test_artifact_paths_follow_output_contract(monkeypatch) -> None:
     assert artifact.resume_tex_path == str((Path("outputs") / "resumes" / f"seatgeek-software-engineer-i-job-{job.id:04d}" / "main.tex").resolve())
     assert artifact.resume_pdf_path == str((Path("outputs") / "resumes" / f"candidate-resume-seatgeek-software-engineer-i-job-{job.id:04d}.pdf").resolve())
     assert artifact.cover_letter_path == str(
-        (Path("outputs") / "cover_letters" / f"candidate-cover-letter-seatgeek-software-engineer-i-job-{job.id:04d}.md").resolve()
+        (Path("outputs") / "cover_letters" / f"candidate-cover-letter-seatgeek-software-engineer-i-job-{job.id:04d}.docx").resolve()
     )
     assert Path(artifact.resume_tex_path).exists()
     assert Path(artifact.resume_pdf_path).exists()

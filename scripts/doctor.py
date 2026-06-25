@@ -130,7 +130,7 @@ def check_json_files() -> tuple[bool, str]:
 
 def check_gitignore_privacy() -> tuple[bool, str]:
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    required_patterns = ["outputs/", "artifacts/", ".env", "*.db", "*resume*.pdf", "*cover-letter*.md"]
+    required_patterns = ["outputs/", "artifacts/", ".env", "*.db", "*resume*.pdf", "*.docx"]
     missing = [pattern for pattern in required_patterns if pattern not in gitignore]
     if missing:
         return fail(".gitignore missing privacy patterns: " + ", ".join(missing))

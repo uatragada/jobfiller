@@ -31,6 +31,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "experience": [],
         "projects": [],
         "skills": [],
+        "cover_letter": "",
     },
     "scan": {
         "remote_first": True,
@@ -40,6 +41,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "default_keywords": "software engineer, data analyst, product, operations, remote, hybrid",
         "default_limit": 20,
         "seed_data_path": str(ROOT / "examples" / "jobs.sample.json"),
+        "codex_job_sites": "LinkedIn, Indeed, Greenhouse, Lever, Built In, company career pages",
     },
     "llm": {
         "provider": "ollama",
@@ -50,7 +52,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "artifacts": {
         "resume_filename_template": "{candidate_slug}-resume-{company_slug}.pdf",
-        "cover_letter_filename_template": "{candidate_slug}-cover-letter-{company_slug}.md",
+        "cover_letter_filename_template": "{candidate_slug}-cover-letter-{company_slug}.docx",
     },
 }
 

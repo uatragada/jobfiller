@@ -19,7 +19,7 @@ Get the local session token from `GET /api/session` after starting JobFiller. Th
 ```json
 {
   "source": "agent",
-  "process": false,
+  "process": true,
   "jobs": [
     {
       "url": "https://example.com/jobs/backend-software-engineer",
@@ -46,7 +46,7 @@ Get the local session token from `GET /api/session` after starting JobFiller. Th
 Top-level fields:
 
 - `source`: optional string saved on imported jobs. Defaults to `agent`.
-- `process`: optional boolean. `true` processes imported jobs immediately; `false` only creates or updates records. Defaults to `false`.
+- `process`: optional compatibility boolean. Imports now always run the automatic missing-information and artifact pipeline; open blocking questions still prevent packet generation.
 - `jobs`: array of job records. Batches must contain 1-100 jobs.
 
 Job fields:
@@ -56,7 +56,7 @@ Job fields:
 - `apply_url`: optional public `http` or `https` application URL. Unsafe local, private, reserved, credentialed, or malformed URLs are rejected.
 - `key_requirements`, `keywords`: optional semicolon-separated text used for matching and artifact generation.
 - `fit_score`: optional integer score supplied by the caller.
-- `notes`, `posting_age_text`, `raw_text`, `materials`, `manual_questions`, `salary`: optional supporting context.
+- `notes`, `posting_age_text`, `raw_text`, `materials`, `manual_questions`, `salary`: optional supporting context. `manual_questions` is split into blocking question queue rows for the imported job.
 
 ## Response Body
 
@@ -82,6 +82,35 @@ Response fields:
 - `errors`: per-record failures with the original zero-based `index`, `url`, and `error` message.
 - `job_ids`: database IDs for successfully imported records.
 
+## Gmail Job Alert Import
+
+Agents with Gmail connector access can parse job-alert emails directly through:
+
+```http
+POST /api/imports/gmail-alerts
+Content-Type: application/json
+X-JobFiller-Token: <local session token>
+```
+
+```json
+{
+  "source": "gmail-alert",
+  "process": true,
+  "emails": [
+    {
+      "id": "gmail-message-id",
+      "thread_id": "gmail-thread-id",
+      "from_": "LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>",
+      "subject": "Backend Engineer at ExampleCo",
+      "email_ts": "2026-06-24T14:30:00Z",
+      "body": "[ExampleCo](https://www.linkedin.com/jobs/view/123) [Backend Engineer\nExampleCo · Raleigh, NC (Hybrid)](https://www.linkedin.com/jobs/view/123)"
+    }
+  ]
+}
+```
+
+The importer treats email content as untrusted source text. It extracts known alert formats from LinkedIn, Indeed, Ladders, Glassdoor, and simple subject/link matches, scores parsed jobs against the configured candidate profile, adds manual questions for missing facts such as clearance or seniority fit, and then forwards each parsed job through the same validated import path as `POST /api/imports/bulk`.
+
 ## PowerShell Example
 
 ```powershell
@@ -92,5 +121,5 @@ Invoke-RestMethod `
   -Uri "http://127.0.0.1:8001/api/imports/bulk" `
   -Headers @{ "X-JobFiller-Token" = $session.mutation_token } `
   -ContentType "application/json" `
-  -Body (@{ source = "agent-example"; process = $false; jobs = $payload } | ConvertTo-Json -Depth 10)
+  -Body (@{ source = "agent-example"; process = $true; jobs = $payload } | ConvertTo-Json -Depth 10)
 ```

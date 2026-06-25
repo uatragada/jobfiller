@@ -70,6 +70,7 @@ npm run build
 ```
 
 The expected result is a passing backend suite, passing frontend browser-flow tests, and a successful Vite production build.
+`npm test` runs the frontend route smoke, button workflow, download, API-auth, and performance suites. Use `npm run test:rebuild`, `npm run test:buttons`, `npm run test:downloads`, `npm run test:api-auth`, or `npm run test:performance` for narrower checks while developing.
 `python scripts/verify_release.py` also runs `python start_jobfiller.py --smoke --mcp-export-smoke` to prove the app reaches a usable dashboard/API state, verifies a live MCP export against a temporary smoke database, and cleans up its child processes.
 `python scripts/doctor.py` performs a fast clone-readiness check for Python, Node, package manager, config files, and privacy-sensitive ignore rules.
 `python scripts/smoke_mcp.py` launches the bundled stdio MCP server and verifies Codex/Claude export tools are listed and callable.
@@ -119,6 +120,14 @@ optional dependency set:
 ## Bulk Imports
 
 Agents and scripts can import multiple job records with `POST /api/imports/bulk`. See [docs/agent-import-contract.md](docs/agent-import-contract.md) for the payload and response contract.
+
+## Product Ideas
+
+Brainstormed feature ideas and workflow-streamlining notes live in [docs/product-ideas.md](docs/product-ideas.md). These are research notes, not committed roadmap items.
+
+## Documentation
+
+The full project documentation starts at [docs/README.md](docs/README.md). It includes architecture, developer setup, API reference, data model, workflows, operations, frontend, MCP, release, and publishing guides.
 
 ## MCP For Codex And Claude Code
 

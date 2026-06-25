@@ -162,7 +162,18 @@ function Is-JobFillerBackendProcess {
     return $cmd -like "*uvicorn*" -and $cmd -like "*app.backend.main:app*"
 }
 
-function Stop-ProcessesByPort {
+function Is-JobFillerFrontendProcess {
+    param($Listener)
+    if (-not $Listener -or -not $Listener.IsActive) {
+        return $false
+    }
+
+    $cmd = (Get-SafeString $Listener.CommandLine).ToLowerInvariant()
+    $inFrontendDir = $cmd -like "*app\frontend*" -or $cmd -like "*app/frontend*"
+    return $cmd -like "*vite*" -and $inFrontendDir
+}
+
+function Stop-JobFillerFrontendProcessesByPort {
     param([int]$Port)
     $listeners = Get-PortListeners -Port $Port
     if (-not $listeners) {
@@ -170,21 +181,31 @@ function Stop-ProcessesByPort {
         return
     }
 
+    $stoppedAny = $false
     foreach ($listener in $listeners | Where-Object { $_.IsActive }) {
+        if (-not (Is-JobFillerFrontendProcess $listener)) {
+            Write-Output "Leaving non-JobFiller listener $($listener.OwningProcess) ($($listener.ProcessName)) on frontend port ${Port}; trying another port if available."
+            continue
+        }
         try {
-            Write-Output "Stopping process $($listener.OwningProcess) ($($listener.ProcessName)) on port ${Port}."
+            Write-Output "Stopping JobFiller frontend process $($listener.OwningProcess) ($($listener.ProcessName)) on port ${Port}."
             Stop-Process -Id $listener.OwningProcess -Force -ErrorAction SilentlyContinue
             if (Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue) {
                 taskkill.exe /PID $listener.OwningProcess /F /T | Out-Null
             }
+            $stoppedAny = $true
         } catch {
-            Write-Output "Could not stop process $($listener.OwningProcess): $($_.Exception.Message)"
+            Write-Output "Could not stop JobFiller frontend process $($listener.OwningProcess): $($_.Exception.Message)"
         }
+    }
+
+    if (-not $stoppedAny) {
+        return
     }
 
     # Wait briefly for port release, including stale listeners disappearing.
     for ($i = 0; $i -lt 10; $i++) {
-        $remaining = Get-PortListeners -Port $Port | Where-Object { $_.IsActive }
+        $remaining = Get-PortListeners -Port $Port | Where-Object { $_.IsActive -and (Is-JobFillerFrontendProcess $_) }
         if (-not $remaining) {
             return
         }
@@ -515,9 +536,9 @@ function Ensure-FrontendPortFree {
     }
     Write-Output "Frontend port ${Port} is already in use; clearing before startup."
     foreach ($listener in $listeners) {
-        $cmd = (Get-SafeString $listener.CommandLine).ToLowerInvariant()
-        if ($cmd -notlike "*vite*" -or $cmd -notlike "*app\frontend*") {
-            throw "Frontend port ${Port} is used by another process. Stop PID $($listener.OwningProcess) or set a different frontend port before starting JobFiller."
+        if (-not (Is-JobFillerFrontendProcess $listener)) {
+            Write-Output "Frontend port ${Port} is held by non-JobFiller PID $($listener.OwningProcess) ($($listener.ProcessName)); leaving it running."
+            throw "Frontend port ${Port} is used by another process; JobFiller will try another configured frontend port."
         }
         try {
             Stop-Process -Id $listener.OwningProcess -Force -ErrorAction SilentlyContinue
@@ -721,7 +742,7 @@ try {
                 break
             } catch {
                 Write-Output "Frontend start attempt ${frontendAttempt} on port ${candidateFrontendPort} failed: $($_.Exception.Message)"
-                Stop-ProcessesByPort -Port $candidateFrontendPort
+                Stop-JobFillerFrontendProcessesByPort -Port $candidateFrontendPort
                 Start-Sleep -Milliseconds 300
             }
         }
